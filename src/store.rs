@@ -5,21 +5,21 @@ use std::u64;
 
 pub struct Store<'a> {
   max_offset: u64,
-  data: Box<BTreeMap<&'a str, Box<BTreeMap<u64, &'a [u8]>>>>
+  data: BTreeMap<&'a str, BTreeMap<u64, &'a [u8]>>
 }
 
 impl<'a> Store<'a> {
   pub fn new<'b>() -> Store<'b> {
     Store {
       max_offset: 0,
-      data: Box::new(BTreeMap::new()),
+      data: BTreeMap::new(),
     }
   }
 
   pub fn add(&mut self, key: &'a str, value: &'a [u8]) {
     self.max_offset += 1;
     if self.data.get(&key).is_none() {
-      if self.data.insert(key, Box::new(BTreeMap::new())).is_some() {
+      if self.data.insert(key, BTreeMap::new()).is_some() {
         panic!("Invariant violation; duplicate version tree detected");
       }
     }
