@@ -1,4 +1,6 @@
+use std::collections::Bound::Included;
 use std::collections::BTreeMap;
+use std::u64;
 
 
 pub struct Store<'a> {
@@ -17,19 +19,37 @@ impl<'a> Store<'a> {
   pub fn add(&'a mut self, key: &'a str, value: &'a [u8]) {
     self.max_offset += 1;
     if self.data.get_mut(&key).is_none() {
-        if self.data.insert(key, Box::new(BTreeMap::new())).is_some() {
-            panic!("Invariant violation; duplicate version tree detected");
-        }
+      if self.data.insert(key, Box::new(BTreeMap::new())).is_some() {
+        panic!("Invariant violation; duplicate version tree detected");
+      }
     }
 
     if self.data.get_mut(&key).unwrap().insert(self.max_offset, value).is_some() {
       panic!("Invariant violation; duplicate offset detected");
     }
   }
+
+  pub fn get(&'a mut self, key: &'a str) -> Option<&'a [u8]> {
+    self.data.get(&key).map( |version_tree| {
+      version_tree.range(Included(&u64::MAX), Included(&u64::MAX)).last().unwrap()
+    })
+  }
 }
 
 #[test]
 fn add_something() {
-    let mut store = Store::new();
-    store.add("yo", b"ok");
+  let mut store = Store::new();
+  store.add("yo", b"ok");
+}
+
+#[test]
+fn get_something() {
+  let mut store = Store::new();
+  store.add("spaghetti", b"I'm");
+  store.add("spaghetti", b"James");
+  store.add("spaghetti", b"Quall");
+  store.add("spaghetti", b"spaghetti");
+  store.add("spaghetti", b"and");
+  store.add("spaghetti", b"meatballs");
+  assert!(store.get("spaghetti") == Some(b"meatballs"));
 }
