@@ -31,7 +31,8 @@ impl<'a> Store<'a> {
 
   pub fn get(&'a mut self, key: &'a str) -> Option<&'a [u8]> {
     self.data.get(&key).map( |version_tree| {
-      version_tree.range(Included(&u64::MAX), Included(&u64::MAX)).last().unwrap()
+      let (k, v) = version_tree.range(Included(&0), Included(&u64::MAX)).last().unwrap();
+      *v
     })
   }
 }
