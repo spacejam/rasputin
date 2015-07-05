@@ -17,13 +17,19 @@ impl<'a> Store<'a> {
   pub fn add(&'a mut self, key: &'a str, value: &'a [u8]) {
     self.max_offset += 1;
     if self.data.get_mut(&key).is_none() {
-        if self.data.insert(key, Box::new(BTreeMap::new())).is_none() {
-            panic!("Invariant violation; duplicate offset detected");
+        if self.data.insert(key, Box::new(BTreeMap::new())).is_some() {
+            panic!("Invariant violation; duplicate version tree detected");
         }
     }
 
-    if self.data.get_mut(&key).unwrap().insert(self.max_offset, value).is_none() {
+    if self.data.get_mut(&key).unwrap().insert(self.max_offset, value).is_some() {
       panic!("Invariant violation; duplicate offset detected");
     }
   }
+}
+
+#[test]
+fn add_something() {
+    let mut store = Store::new();
+    store.add("yo", b"ok");
 }
