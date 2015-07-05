@@ -1,7 +1,10 @@
 extern crate quall;
-use quall::create;
+use quall::{
+  Store
+};
+
 
 fn main() {
-  create();
+  let store = Store::new();
   println!("Spaghetti and meatballs");
 }

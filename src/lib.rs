@@ -1,8 +1,6 @@
 #![crate_id = "quall"]
 #![crate_type = "lib"]
 
-pub use quall::{
-  create
-};
+pub use store::Store;
 
-pub mod quall;
+pub mod store;
