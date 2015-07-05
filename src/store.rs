@@ -12,13 +12,13 @@ impl<'a> Store<'a> {
   pub fn new<'b>() -> Store<'b> {
     Store {
       max_offset: 0,
-      data: Box::new(BTreeMap::new())
+      data: Box::new(BTreeMap::new()),
     }
   }
 
-  pub fn add(&'a mut self, key: &'a str, value: &'a [u8]) {
+  pub fn add(&mut self, key: &'a str, value: &'a [u8]) {
     self.max_offset += 1;
-    if self.data.get_mut(&key).is_none() {
+    if self.data.get(&key).is_none() {
       if self.data.insert(key, Box::new(BTreeMap::new())).is_some() {
         panic!("Invariant violation; duplicate version tree detected");
       }
@@ -29,9 +29,9 @@ impl<'a> Store<'a> {
     }
   }
 
-  pub fn get(&'a mut self, key: &'a str) -> Option<&'a [u8]> {
+  pub fn get(&self, key: &'a str) -> Option<&'a [u8]> {
     self.data.get(&key).map( |version_tree| {
-      let (k, v) = version_tree.range(Included(&0), Included(&u64::MAX)).last().unwrap();
+      let (_, v) = version_tree.range(Included(&0), Included(&u64::MAX)).last().unwrap();
       *v
     })
   }
