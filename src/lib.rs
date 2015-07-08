@@ -7,5 +7,7 @@
 #![feature(slice_extras)]
 
 pub use store::Store;
+pub use paxos::Parliament;
 
 pub mod store;
+pub mod paxos;
