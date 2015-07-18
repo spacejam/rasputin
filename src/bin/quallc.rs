@@ -11,13 +11,13 @@ use docopt::Docopt;
 const MS_PER_SEC: u32 = 1000;
 
 static USAGE: &'static str = "
-quallc - HA transactional store with a focus on usability, stability and performance.
+quall - HA transactional store with a focus on usability, stability and performance.
 
 This program is the Quall command line client.
 
 Usage:
-    quall-cli --help
-    quall-cli [--peers=<peers>] [--get=<key>] [--set=<key>,<value>] [--cas=<key>,<oldvalue>,<value>]
+    quallc --help
+    quallc [--peers=<peers>] [--get=<key>] [--set=<key>,<value>] [--cas=<key>,<oldvalue>,<value>]
 
 Options:
     --help                          Show this help message.
