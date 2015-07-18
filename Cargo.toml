@@ -8,3 +8,15 @@ authors = [
   "Steve Salevan <steve.salevan@gmail.com>"
 ]
 license = "Apache-2.0"
+
+[dependencies]
+docopt = "0.6.66"
+log = "0.3.1"
+time = "0.1"
+rustc-serialize = "0.3.15"
+
+[dependencies.protobuf]
+git = "https://github.com/stepancheg/rust-protobuf.git"
+
+[dependencies.mio]
+git = "https://github.com/carllerche/mio.git"
