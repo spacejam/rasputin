@@ -1,0 +1,140 @@
+syntax = "proto2";
+
+package quall;
+
+//
+// Client <-> quall server messages
+//
+message SetReq {
+  required bytes key = 1;
+  required bytes value = 2;
+}
+
+message SetRes {
+  required bool success = 1;
+  required uint64 txid = 2;
+  optional string err = 3;
+}
+
+message GetReq {
+  required bytes key = 1;
+}
+
+message GetRes {
+  required bool success = 1;
+  required uint64 txid = 2;
+  required bytes value = 3;
+  optional string err = 4;
+}
+
+// The CAS logic happens in the master, then propagates via paxos.
+message CASReq {
+  required bytes key = 1;
+  required bytes value = 2;
+  required bytes oldvalue = 3;
+}
+
+message CASRes {
+  required bool success = 1;
+  required uint64 txid = 2;
+  optional string err = 3;
+}
+
+message WatchReq {
+  required bytes key = 1;
+  required uint64 lasttxid = 2;
+  required bool recursive = 3;
+  required bool historical = 4;
+}
+
+message VersionedKV {
+  required uint64 txid = 1;
+  required bytes key = 2;
+  required bytes value = 3;
+}
+
+message WatchRes {
+  required bool success = 1;
+  repeated VersionedKV history = 2;
+  optional string err = 3;
+}
+
+// client top-levl API
+message CliReq {
+  optional GetReq get = 1;
+  optional SetReq set = 2;
+  optional CASReq cas = 3;
+  optional WatchReq watch = 4;
+}
+
+message CliRes {
+  optional GetRes get = 1;
+  optional SetRes set = 2;
+  optional CASRes cas = 3;
+  optional WatchRes watch = 4;
+}
+
+//
+// Propagation
+//
+message Append {
+  required bytes key = 2;
+  required bytes value = 3;
+}
+
+message Learn {
+  required uint64 txid = 1;
+}
+
+message Propose {
+  required uint64 txid = 1;
+  // the first Append implicitly gets an id of txid + 1, second of txid + 2 etc...
+  repeated Append mutations = 2;
+}
+
+message Accept {
+  required uint64 txid = 1;
+}
+
+message Reject {
+  required uint64 txid = 1;
+}
+
+//
+// Leadership
+//
+message VoteReq {
+  required uint64 maxtxid = 1;
+  required uint64 attempt = 2;
+}
+message VoteRes {
+  required bool success = 1;
+  required uint64 attempt = 2;
+}
+
+//
+// Log Catch-Up
+//
+message BatchReq {
+  required uint64 fromtxid = 1;
+}
+message BatchRes {
+  repeated VersionedKV history = 1;
+}
+
+// server<->server top-level api
+message SrvReq {
+  required uint64 srvid = 1;
+  optional VoteReq voteReq = 2;
+  optional BatchReq batchReq = 3;
+  optional Learn learn = 4;
+  optional Propose propose = 5;
+}
+
+message SrvRes {
+  required uint64 srvid = 1;
+  optional VoteRes voteRes = 2;
+  optional BatchRes batchRes = 3;
+  optional Accept accept = 4;
+  optional Reject reject = 5;
+}
