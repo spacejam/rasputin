@@ -1,4 +1,4 @@
-# quall
+# quall :godmode:
 High performance HA subscribable transactional KV store.
 
 ## Features
