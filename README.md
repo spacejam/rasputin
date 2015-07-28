@@ -1,4 +1,4 @@
-# Flavortown :godmode:
+# Flavortown :city_sunrise:
 High performance HA subscribable transactional KV store.
 
 ## Features
