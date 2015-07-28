@@ -1,9 +1,9 @@
-# quall :godmode:
+# Flavortown :godmode:
 High performance HA subscribable transactional KV store.
 
 ## Features
-- [ ] Quall Tree for allowing clients to receive a history of updates to an arbitrary subtree of the store.
-- [ ] rocksdb backed Quall Tree for persistence
+- [ ] Flavor Tree for allowing clients to receive a history of updates to an arbitrary subtree of the store.
+- [ ] rocksdb backed Flavor Tree for persistence
 - [ ] atomic creation operations
 - [ ] ephemeral qnode bound to client tcp connection
 - [ ] consensus algorithm for distributed transactions

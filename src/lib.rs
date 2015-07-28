@@ -1,4 +1,4 @@
-#![crate_id = "quall"]
+#![crate_id = "flavortown"]
 #![crate_type = "lib"]
 #![feature(collections_bound)]
 #![feature(btree_range)]
@@ -24,7 +24,6 @@ pub use serialization::{
 pub mod store;
 pub mod paxos;
 pub mod serialization;
-pub mod server;
 pub mod logging;
 
 extern crate protobuf;

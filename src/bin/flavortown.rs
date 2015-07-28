@@ -2,7 +2,7 @@ extern crate rustc_serialize;
 extern crate docopt;
 #[macro_use]
 extern crate log;
-extern crate quall;
+extern crate flavortown;
 
 use std::sync::{Arc, RwLock};
 
@@ -11,13 +11,13 @@ use docopt::Docopt;
 const MS_PER_SEC: u32 = 1000;
 
 static USAGE: &'static str = "
-qualld - HA transactional store with a focus on usability, stability and performance.
+flavortown - HA transactional store with a focus on usability, stability and performance.
 
-This program is the Quall server process.
+This program is the Flavortown server process.
 
 Usage:
-    qualld --help
-    qualld --peers=<peers> [--logfile=<file>] [--storage-dir=<directory>]
+    flavortownd --help
+    flavortownd --peers=<peers> [--logfile=<file>] [--storage-dir=<directory>]
 
 Options:
     --help                          Show this help message.
@@ -32,7 +32,7 @@ fn main() {
         .and_then(|d| d.decode())
         .unwrap_or_else(|e| e.exit());
 
-    quall::logging::init_logger(args.flag_logfile).unwrap();
+    flavortown::logging::init_logger(args.flag_logfile).unwrap();
     print_banner();
 
     let peers: Vec<String> = args.flag_peers

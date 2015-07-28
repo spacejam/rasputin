@@ -2,7 +2,7 @@ extern crate rustc_serialize;
 extern crate docopt;
 #[macro_use]
 extern crate log;
-extern crate quall;
+extern crate flavortown;
 
 use std::sync::{Arc, RwLock};
 
@@ -11,13 +11,13 @@ use docopt::Docopt;
 const MS_PER_SEC: u32 = 1000;
 
 static USAGE: &'static str = "
-quall - HA transactional store with a focus on usability, stability and performance.
+ftctl - client for flavortown.
 
-This program is the Quall command line client.
+This program is the Flavortown command line client.
 
 Usage:
-    quallc --help
-    quallc [--peers=<peers>] [--get=<key>] [--set=<key>,<value>] [--cas=<key>,<oldvalue>,<value>]
+    flavortownc --help
+    flavortownc [--peers=<peers>] [--get=<key>] [--set=<key>,<value>] [--cas=<key>,<oldvalue>,<value>]
 
 Options:
     --help                          Show this help message.

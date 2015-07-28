@@ -5,19 +5,19 @@ use std::collections::BTreeMap;
 use std::collections::btree_map::Range;
 
 /*
- * A Quall Tree facilitates efficient
+ * A Flavor Tree facilitates efficient
  * traversals of subtree mutation history.
  */
 pub struct Store<'a> {
     max_offset: u64,
-    quall_tree: BTreeMap<&'a [u8], BTreeMap<u64, &'a [u8]>>,
+    flavor_tree: BTreeMap<&'a [u8], BTreeMap<u64, &'a [u8]>>,
 }
 
 impl<'a> Store<'a> {
     pub fn new<'b>() -> Store<'b> {
         Store {
             max_offset: 0,
-            quall_tree: BTreeMap::new(),
+            flavor_tree: BTreeMap::new(),
         }
     }
 
@@ -43,13 +43,13 @@ impl<'a> Store<'a> {
                 return Err("Keys cannot contain the ':' character");
         }
 
-        if self.quall_tree.get(key.as_bytes()).is_none() {
-            if self.quall_tree.insert(key.as_bytes(), BTreeMap::new()).is_some() {
+        if self.flavor_tree.get(key.as_bytes()).is_none() {
+            if self.flavor_tree.insert(key.as_bytes(), BTreeMap::new()).is_some() {
                 panic!("Invariant violation; duplicate version tree detected");
             }
         }
 
-        if self.quall_tree.get_mut(key.as_bytes()).unwrap().insert(txid, value).is_some() {
+        if self.flavor_tree.get_mut(key.as_bytes()).unwrap().insert(txid, value).is_some() {
             panic!("Invariant violation; duplicate offset detected");
         }
         Ok(())
@@ -72,7 +72,7 @@ impl<'a> Store<'a> {
     }
 
     pub fn get(&self, key: &'a str) -> Option<&'a [u8]> {
-        self.quall_tree.get(key.as_bytes()).map( |version_tree| {
+        self.flavor_tree.get(key.as_bytes()).map( |version_tree| {
             let (_, v) = version_tree.range(Unbounded, Unbounded).last().unwrap();
             *v
         })
@@ -82,7 +82,7 @@ impl<'a> Store<'a> {
         let mut keyVec = Vec::with_capacity(prefix.len());
         keyVec.extend(prefix.as_bytes());
         let upper = incr_vec(keyVec);
-        for (key, supervalue) in self.quall_tree.range(Included(&prefix.as_bytes()), Excluded(&upper.as_slice())) {
+        for (key, supervalue) in self.flavor_tree.range(Included(&prefix.as_bytes()), Excluded(&upper.as_slice())) {
             for (subtxid, subvalue) in supervalue.range(Included(&txid), Unbounded) {
                 f(*subtxid, key, subvalue);
             }

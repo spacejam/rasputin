@@ -1,6 +1,6 @@
 [package]
 
-name = "quall"
+name = "flavortown"
 description = "A consensus datastore for the people; spaghetti and meatballs"
 version = "0.0.1"
 authors = [
