@@ -2,7 +2,7 @@ extern crate rustc_serialize;
 extern crate docopt;
 #[macro_use]
 extern crate log;
-extern crate flavortown;
+extern crate rasputin;
 
 use std::sync::{Arc, RwLock};
 
@@ -11,13 +11,13 @@ use docopt::Docopt;
 const MS_PER_SEC: u32 = 1000;
 
 static USAGE: &'static str = "
-ftctl - client for flavortown.
+ftctl - client for rasputin.
 
-This program is the Flavortown command line client.
+This program is the Rasputin DB command line client.
 
 Usage:
-    flavortownc --help
-    flavortownc [--peers=<peers>] [--get=<key>] [--set=<key>,<value>] [--cas=<key>,<oldvalue>,<value>]
+    rasputinc --help
+    rasputinc [--peers=<peers>] [--get=<key>] [--set=<key>,<value>] [--cas=<key>,<oldvalue>,<value>]
 
 Options:
     --help                          Show this help message.

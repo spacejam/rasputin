@@ -1,10 +1,5 @@
-#![crate_id = "flavortown"]
+#![crate_id = "rasputin"]
 #![crate_type = "lib"]
-#![feature(collections_bound)]
-#![feature(btree_range)]
-#![feature(collections)]
-#![feature(convert)]
-#![feature(slice_extras)]
 
 pub use store::Store;
 pub use paxos::Parliament;

@@ -2,7 +2,7 @@ extern crate rustc_serialize;
 extern crate docopt;
 #[macro_use]
 extern crate log;
-extern crate flavortown;
+extern crate rasputin;
 
 use std::sync::{Arc, RwLock};
 
@@ -11,13 +11,13 @@ use docopt::Docopt;
 const MS_PER_SEC: u32 = 1000;
 
 static USAGE: &'static str = "
-flavortown - HA transactional store with a focus on usability, stability and performance.
+rasputin - HA transactional store with a focus on usability, stability and performance.
 
-This program is the Flavortown server process.
+This program is the Rasputin DB server process.
 
 Usage:
-    flavortownd --help
-    flavortownd --peers=<peers> [--logfile=<file>] [--storage-dir=<directory>]
+    rasputind --help
+    rasputind --peers=<peers> [--logfile=<file>] [--storage-dir=<directory>]
 
 Options:
     --help                          Show this help message.
@@ -32,7 +32,7 @@ fn main() {
         .and_then(|d| d.decode())
         .unwrap_or_else(|e| e.exit());
 
-    flavortown::logging::init_logger(args.flag_logfile).unwrap();
+    rasputin::logging::init_logger(args.flag_logfile).unwrap();
     print_banner();
 
     let peers: Vec<String> = args.flag_peers

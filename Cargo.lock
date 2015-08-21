@@ -1,5 +1,5 @@
 [root]
-name = "flavortown"
+name = "rasputin"
 version = "0.0.1"
 dependencies = [
  "docopt 0.6.68 (registry+https://github.com/rust-lang/crates.io-index)",
