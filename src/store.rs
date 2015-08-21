@@ -1,8 +1,5 @@
-extern crate collections;
-use std::collections::Bound;
 use std::collections::Bound::{Included, Excluded, Unbounded};
 use std::collections::BTreeMap;
-use std::collections::btree_map::Range;
 
 /*
  * A History Tree facilitates efficient
@@ -73,11 +70,12 @@ impl<'a> Store<'a> {
 
     pub fn get(&self, key: &'a str) -> Option<&'a [u8]> {
         self.history_tree.get(key.as_bytes()).map( |version_tree| {
-            let (_, v) = version_tree.range(Unbounded, Unbounded).last().unwrap();
+            let (_, v) = version_tree.iter().rev().next().unwrap();
             *v
         })
     }
 
+    /*  // TODO(tyler) waiting on stable ranges
     fn subtree_map<F: Fn(u64, &[u8], &[u8])>(&self, prefix: &str, txid: u64, f: F) {
         let mut keyVec = Vec::with_capacity(prefix.len());
         keyVec.extend(prefix.as_bytes());
@@ -88,13 +86,13 @@ impl<'a> Store<'a> {
             }
         }
     }
+    */
 }
 
 fn incr_vec(v: Vec<u8>) -> Vec<u8> {
-    let mut iv = Vec::new();
-    iv.extend(v[0]);
-    if iv.len() > 0 {
-        iv.push(v[v.len()-1] + 1);
+    let mut iv = v.clone();
+    if v.len() > 0 {
+        iv[v.len()-1] += 1;
     }
     iv
 }
@@ -117,6 +115,7 @@ fn get_something() {
     assert!(store.get("spaghetti") == Some(b"meatballs"));
 }
 
+/* // TODO(tyler) waiting on stable ranges
 #[test]
 fn get_subtree() {
     let mut store = Store::new();
@@ -128,6 +127,7 @@ fn get_subtree() {
         println!("{:?}", value);
     });
 }
+*/
 
 #[test]
 fn cas_test() {
