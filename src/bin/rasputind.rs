@@ -17,7 +17,7 @@ This program is the Rasputin DB server process.
 
 Usage:
     rasputind --help
-    rasputind --peers=<peers> [--logfile=<file>] [--storage-dir=<directory>]
+    rasputind [--peers=<peers>] [--logfile=<file>] [--storage-dir=<directory>]
 
 Options:
     --help                          Show this help message.
@@ -28,9 +28,11 @@ Options:
 ";
 
 fn main() {
+    println!("1");
     let args: Args = Docopt::new(USAGE)
         .and_then(|d| d.decode())
         .unwrap_or_else(|e| e.exit());
+    println!("2");
 
     rasputin::logging::init_logger(args.flag_logfile).unwrap();
     print_banner();

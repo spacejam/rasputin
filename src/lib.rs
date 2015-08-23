@@ -1,8 +1,8 @@
 #![crate_id = "rasputin"]
 #![crate_type = "lib"]
 
-pub use store::Store;
-pub use paxos::Parliament;
+pub use server::store::Store;
+pub use server::paxos::Parliament;
 pub use serialization::{
     VersionedKV,
     SetReq, SetRes,
@@ -16,8 +16,7 @@ pub use serialization::{
     SrvReq, SrvRes,
 };
 
-pub mod store;
-pub mod paxos;
+pub mod server;
 pub mod serialization;
 pub mod logging;
 
