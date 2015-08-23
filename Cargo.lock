@@ -4,7 +4,7 @@ version = "0.0.1"
 dependencies = [
  "docopt 0.6.68 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "mio 0.5.0-pre (git+https://github.com/carllerche/mio.git)",
+ "mio 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 1.0.1 (git+https://github.com/stepancheg/rust-protobuf.git)",
  "rustc-serialize 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "time 0.1.31 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -25,8 +25,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "bytes"
-version = "0.2.10"
-source = "git+https://github.com/carllerche/bytes#b4abd1431a553be131c757b9b366c71dfd6461af"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "clock_ticks"
@@ -78,10 +78,10 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "0.5.0-pre"
-source = "git+https://github.com/carllerche/mio.git#94113ff13d44055cfead673ff58ddda5883e9200"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "bytes 0.2.10 (git+https://github.com/carllerche/bytes)",
+ "bytes 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "clock_ticks 0.0.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",

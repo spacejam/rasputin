@@ -16,9 +16,7 @@ docopt = "0.6.66"
 log = "0.3.1"
 time = "0.1"
 rustc-serialize = "0.3.15"
+mio = "0.4.2"
 
 [dependencies.protobuf]
 git = "https://github.com/stepancheg/rust-protobuf.git"
-
-[dependencies.mio]
-git = "https://github.com/carllerche/mio.git"
