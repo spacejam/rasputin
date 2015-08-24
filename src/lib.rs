@@ -22,5 +22,5 @@ pub mod logging;
 
 extern crate protobuf;
 extern crate mio;
-extern crate log;
+#[macro_use] extern crate log;
 extern crate time;
