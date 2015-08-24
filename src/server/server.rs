@@ -14,7 +14,7 @@ const SERVER: Token = Token(0);
 
 pub struct Server {
     srv_sock: TcpListener,
-    peers: Vec<String>,   
+    peers: Vec<String>,
     conns: Slab<ServerConn>
 }
 

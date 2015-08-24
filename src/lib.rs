@@ -16,6 +16,7 @@ pub use serialization::{
     SrvReq, SrvRes,
 };
 
+pub mod message;
 pub mod server;
 pub mod serialization;
 pub mod logging;
