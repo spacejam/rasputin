@@ -8,8 +8,23 @@ use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
 use self::bytes::{Buf, ByteBuf, MutByteBuf, SliceBuf};
 
+use ::{SrvReq, SrvRes, CliReq, CliRes};
+
 const SERVER_CLIENTS: Token = Token(0);
 const SERVER_PEERS: Token = Token(1);
+
+pub enum Message {
+    PeerReq(SrvReq),
+    PeerRes(SrvRes),
+    CliReq(CliReq),
+    CliRes(CliRes),
+}
+
+pub struct Envelope {
+    id: u64,
+    tok: Token,
+    msg: Message,
+}
 
 pub struct Server {
     peers: Vec<String>,
@@ -71,11 +86,22 @@ impl Server {
 
         Err("event_loop should not have returned.".to_string())
     }
+
+    fn tok_to_sc(&mut self, tok: Token) -> Option<&mut ServerConn> {
+        if tok.as_usize() > 1 && tok.as_usize() <= 128 {
+            self.peer_handler.conns.get_mut(tok)
+        } else if tok.as_usize() > 128 && tok.as_usize() <= 4096 {
+            self.cli_handler.conns.get_mut(tok)
+        } else {
+            error!("bad event loop notification message envelope");
+            None
+        }
+    }
 }
 
 impl Handler for Server {
     type Timeout = ();
-    type Message = ();
+    type Message = Envelope;
 
     fn ready(
         &mut self,
@@ -123,12 +149,34 @@ impl Handler for Server {
             };
         }
     }
+
+    fn notify(&mut self, event_loop: &mut EventLoop<Server>, msg: Envelope) {
+        let mut sc = self.tok_to_sc(msg.tok).unwrap();
+        // TODO(tyler) serialize <id> | <proto> and write to sc.res_buf
+        if sc.res_buf.is_none() {
+            let mut rb = ByteBuf::mut_with_capacity(128);
+            rb.write_slice(b"<id> | <proto response>");
+            sc.res_buf = Some(rb.flip());
+        } else {
+            let mut rb = sc.res_buf.take().unwrap().flip();
+            rb.write_slice(b"<id> | <proto response>");
+            sc.res_buf = Some(rb.flip());
+        }
+        event_loop.reregister(
+            &sc.sock,
+            msg.tok,
+            sc.interest,
+            PollOpt::edge() | PollOpt::oneshot(),
+        );
+    }
 }
 
 struct ServerConn {
     sock: TcpStream,
-    buf: Option<ByteBuf>,
-    mut_buf: Option<MutByteBuf>,
+    req_buf: Option<ByteBuf>,
+    req_mut_buf: Option<MutByteBuf>,
+    res_buf: Option<ByteBuf>,
+    res_mut_buf: Option<MutByteBuf>,
     token: Option<Token>,
     interest: EventSet
 }
@@ -137,27 +185,33 @@ impl ServerConn {
     fn new(sock: TcpStream) -> ServerConn {
         ServerConn {
             sock: sock,
-            buf: None,
-            mut_buf: Some(ByteBuf::mut_with_capacity(2048)),
+            req_buf: None,
+            req_mut_buf: Some(ByteBuf::mut_with_capacity(2048)),
+            res_buf: None,
+            res_mut_buf: Some(ByteBuf::mut_with_capacity(2048)),
             token: None,
             interest: EventSet::hup()
         }
     }
 
     fn writable(&mut self, event_loop: &mut EventLoop<Server>) -> io::Result<()> {
-        let mut buf = self.buf.take().unwrap();
+        if self.res_buf.is_none() {
+            // no responses yet, don't reregister
+            return Ok(())
+        }
+        let mut res_buf = self.res_buf.take().unwrap();
 
-        match self.sock.try_write_buf(&mut buf) {
+        match self.sock.try_write_buf(&mut res_buf) {
             Ok(None) => {
                 info!("client flushing buf; WOULDBLOCK");
 
-                self.buf = Some(buf);
+                self.res_buf = Some(res_buf);
                 self.interest.insert(EventSet::writable());
             }
             Ok(Some(r)) => {
                 info!("CONN : we wrote {} bytes!", r);
 
-                self.mut_buf = Some(buf.flip());
+                self.res_mut_buf = Some(res_buf.flip());
 
                 self.interest.insert(EventSet::readable());
                 self.interest.remove(EventSet::writable());
@@ -186,11 +240,11 @@ impl ServerConn {
     }
 
     fn readable(&mut self, event_loop: &mut EventLoop<Server>) -> io::Result<()> {
-        let mut buf = self.mut_buf.take().unwrap();
+        let mut req_buf = self.req_mut_buf.take().unwrap();
 
-        match self.sock.try_read_buf(&mut buf) {
+        match self.sock.try_read_buf(&mut req_buf) {
             Ok(None) => {
-                panic!("We just got readable, but were unable to read from the socket?");
+                panic!("got readable, but can't read from the socket");
             }
             Ok(Some(r)) => {
                 info!("CONN : we read {} bytes!", r);
@@ -204,8 +258,13 @@ impl ServerConn {
 
         };
 
-        // prepare to provide this to writable
-        self.buf = Some(buf.flip());
+        self.req_buf = Some(req_buf.flip());
+        event_loop.channel().send(Envelope {
+            id: 5,
+            tok: self.token.unwrap(),
+            msg: Message::CliRes(CliRes::new()),
+        });
+
         event_loop.reregister(
             &self.sock,
             self.token.unwrap(),
@@ -250,7 +309,8 @@ impl ConnSet {
                 PollOpt::edge() | PollOpt::oneshot()
             ).ok().expect("could not register socket with event loop");
             ()
-        }).or_else(|e| Err(Error::new(ErrorKind::Other, "All connection slots full.")))
+        }).or_else(|e| Err(Error::new(ErrorKind::Other,
+                                      "All connection slots full.")))
     }
 
     fn conn_readable(
