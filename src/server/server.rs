@@ -1,7 +1,7 @@
 extern crate bytes;
 use std::io::{Error, ErrorKind};
 use std::io;
-use std::thread;
+use std::sync::mpsc::{self, Sender, Receiver};
 
 use mio::{EventLoop, EventSet, PollOpt, Handler, Token, TryWrite, TryRead};
 use mio::tcp::{TcpListener, TcpStream};
@@ -30,6 +30,10 @@ pub struct Server {
     peers: Vec<String>,
     cli_handler: ConnSet,
     peer_handler: ConnSet,
+    req_tx: Sender<Envelope>,
+    req_rx: Receiver<Envelope>,
+    res_tx: Sender<Envelope>,
+    res_rx: Receiver<Envelope>,
 }
 
 impl Server {
@@ -37,7 +41,7 @@ impl Server {
         peer_port: u16,
         cli_port: u16,
         peers: Vec<String>,
-    ) -> Result<Server, Error> {
+    ) -> io::Result<Server> {
 
         let cli_addr =
             format!("0.0.0.0:{}", cli_port).parse().unwrap();
@@ -48,6 +52,9 @@ impl Server {
             format!("0.0.0.0:{}", peer_port).parse().unwrap();
         let peer_srv_sock =
             try!(TcpListener::bind(&peer_addr));
+
+        let (req_tx, req_rx) = mpsc::channel();
+        let (res_tx, res_rx) = mpsc::channel();
 
         Ok(Server {
             peers: peers,
@@ -61,10 +68,14 @@ impl Server {
                 srv_token: SERVER_PEERS,
                 conns: Slab::new_starting_at(Token(2), 15),
             },
+            req_tx: req_tx,
+            req_rx: req_rx,
+            res_tx: res_tx,
+            res_rx: res_rx,
         })
     }
 
-    pub fn start(&mut self) -> Result<(), String> {
+    pub fn run_event_loop(&mut self) -> io::Result<()> {
 
         let mut event_loop = EventLoop::new().unwrap();
 
@@ -84,7 +95,15 @@ impl Server {
 
         event_loop.run(self).unwrap();
 
-        Err("event_loop should not have returned.".to_string())
+        Err(Error::new(ErrorKind::Other, "event_loop shouldn't have returned."))
+
+    }
+
+    pub fn run_processor(&mut self) -> io::Result<()> {
+        for e in self.req_rx.iter() {
+
+        }
+        Err(Error::new(ErrorKind::Other, "processor shouldn't have returned."))
     }
 
     fn tok_to_sc(&mut self, tok: Token) -> Option<&mut ServerConn> {
@@ -255,7 +274,6 @@ impl ServerConn {
                 info!("not implemented; client err={:?}", e);
                 self.interest.remove(EventSet::readable());
             }
-
         };
 
         self.req_buf = Some(req_buf.flip());

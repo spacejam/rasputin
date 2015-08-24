@@ -4,13 +4,12 @@ extern crate docopt;
 extern crate log;
 extern crate rasputin;
 
-use std::sync::{Arc, RwLock};
+use std::sync::mpsc;
+use std::thread;
 
 use docopt::Docopt;
 
 use rasputin::server::Server;
-
-const MS_PER_SEC: u32 = 1000;
 
 static USAGE: &'static str = "
 rasputin - HA transactional store with a focus on usability, stability and performance.
@@ -55,12 +54,26 @@ fn main() {
         .filter(|s| s != "")
         .collect();
 
-    match Server::new(peer_port, cli_port, peers) {
-        Ok(mut server) => {
-            server.start();
-        },
-        Err(e) => error!("Could not start server"),
-    }
+    let (thread_exit_tx, thread_exit_rx) = mpsc::channel();
+    let srv = Server::new(peer_port, cli_port, peers);
+    srv.and_then(|mut server|
+        Ok(thread::spawn(move || {
+            server.run_event_loop();
+            thread_exit_tx.send(());
+        }))
+    ).unwrap_or_else( |e| panic!("Could not start event loop: {}", e));
+
+    /*
+     let srv_processor = server.and_then(|mut server|
+            Ok(thread::spawn(move || {
+                server.run_processor();
+                thread_exit_tx.send(());
+            }))
+        ).unwrap_or_else( |e| panic!("Could not start processor: {}", e));
+        */
+    
+    thread_exit_rx.recv();
+    error!("A worker thread unexpectedly exited! Shutting down.");
 }
 
 #[derive(Debug, RustcDecodable)]
