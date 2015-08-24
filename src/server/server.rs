@@ -13,8 +13,8 @@ const SERVER_PEERS: Token = Token(1);
 
 pub struct Server {
     peers: Vec<String>,
-    cli_handler: ClientHandler,
-    peer_handler: PeerHandler,
+    cli_handler: ConnSet,
+    peer_handler: ConnSet,
 }
 
 impl Server {
@@ -36,12 +36,14 @@ impl Server {
 
         Ok(Server {
             peers: peers,
-            cli_handler: ClientHandler {
-                conns: Slab::new_starting_at(Token(129), 4096),
+            cli_handler: ConnSet {
                 srv_sock: cli_srv_sock,
+                srv_token: SERVER_CLIENTS,
+                conns: Slab::new_starting_at(Token(129), 4096),
             },
-            peer_handler: PeerHandler {
+            peer_handler: ConnSet {
                 srv_sock: peer_srv_sock,
+                srv_token: SERVER_PEERS,
                 conns: Slab::new_starting_at(Token(2), 128),
             },
         })
@@ -204,76 +206,14 @@ impl ServerConn {
         )
     }
 }
-pub struct PeerHandler {
-    conns: Slab<ServerConn>,
+
+pub struct ConnSet {
     srv_sock: TcpListener,
-}
-
-impl PeerHandler {
-    fn accept(
-        &mut self,
-        event_loop: &mut EventLoop<Server>
-    ) -> io::Result<()> {
-
-        info!("peer server accepting socket");
-
-        let sock = self.srv_sock.accept().unwrap().unwrap();
-        let conn = ServerConn::new(sock,);
-        let tok = self.conns.insert(conn)
-            .ok().expect("could not add connection to slab");
-
-        // Re-register accepting socket
-        event_loop.reregister(
-            &self.srv_sock,
-            SERVER_PEERS,
-            EventSet::readable(),
-            PollOpt::edge() | PollOpt::oneshot(),
-        );
-
-        // Register the connection
-        self.conns[tok].token = Some(tok);
-        event_loop.register_opt(
-            &self.conns[tok].sock,
-            tok,
-            EventSet::readable(),
-            PollOpt::edge() | PollOpt::oneshot(),
-        ).ok().expect("could not register socket with event loop");
-
-        Ok(())
-    }
-
-    fn conn_readable(
-        &mut self,
-        event_loop: &mut EventLoop<Server>,
-        tok: Token,
-    ) -> io::Result<()> {
-
-        info!("peer server conn readable; tok={:?}", tok);
-
-        self.conn(tok).readable(event_loop)
-    }
-
-    fn conn_writable(
-        &mut self,
-        event_loop: &mut EventLoop<Server>,
-        tok: Token,
-    ) -> io::Result<()> {
-
-        info!("peer server conn writable; tok={:?}", tok);
-        self.conn(tok).writable(event_loop)
-    }
-
-    fn conn<'a>(&'a mut self, tok: Token) -> &'a mut ServerConn {
-        &mut self.conns[tok]
-    }
-}
-
-pub struct ClientHandler {
+    srv_token: Token,
     conns: Slab<ServerConn>,
-    srv_sock: TcpListener,
 }
 
-impl ClientHandler {
+impl ConnSet {
     fn accept(
         &mut self,
         event_loop: &mut EventLoop<Server>,
@@ -289,7 +229,7 @@ impl ClientHandler {
         // Re-register accepting socket
         event_loop.reregister(
             &self.srv_sock,
-            SERVER_CLIENTS,
+            self.srv_token,
             EventSet::readable(),
             PollOpt::edge() | PollOpt::oneshot(),
         );
