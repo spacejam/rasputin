@@ -19,11 +19,12 @@ This program is the Rasputin DB server process.
 
 Usage:
     rasputind --help
-    rasputind [--port=<listening port>] [--peers=<peers>] [--logfile=<file>] [--storage-dir=<directory>]
+    rasputind [--cli-port=<listening port>] [--peer-port=<listening port>] [--peers=<peers>] [--logfile=<file>] [--storage-dir=<directory>]
 
 Options:
     --help                          Show this help message.
-    --port=<port>                   Listening port.
+    --cli-port=<port>               Listening port for communication between servers.
+    --peer-port=<port>              Listening port for communication with clients.
     --peers=<host1:port1,...>       List of comma-delimited peers, e.g:
                                     foo.baz.com:7777,bar.baz.com:7777
     --logfile=<path>                File to log output to instead of stdout.
@@ -38,9 +39,14 @@ fn main() {
     rasputin::logging::init_logger(args.flag_logfile).unwrap();
     print_banner();
 
-    let port: u16 = match args.flag_port {
+    let peer_port: u16 = match args.flag_peer_port {
         Some(p) => p,
         None => 7770,
+    };
+
+    let cli_port: u16 = match args.flag_cli_port {
+        Some(p) => p,
+        None => 8880,
     };
 
     let peers: Vec<String> = args.flag_peers
@@ -49,7 +55,7 @@ fn main() {
         .filter(|s| s != "")
         .collect();
 
-    match Server::new(port, peers) {
+    match Server::new(peer_port, cli_port, peers) {
         Ok(mut server) => {
             server.start();
         },
@@ -60,7 +66,8 @@ fn main() {
 #[derive(Debug, RustcDecodable)]
 struct Args {
     flag_help: bool,
-    flag_port: Option<u16>,
+    flag_cli_port: Option<u16>,
+    flag_peer_port: Option<u16>,
     flag_peers: String,
     flag_logfile: Option<String>,
     flag_storagedir: Option<String>,
