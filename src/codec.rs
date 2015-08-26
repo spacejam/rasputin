@@ -37,28 +37,21 @@ impl Codec for Framed {
             let mut sz = [0u8;4];
             assert!(buf.read_slice(&mut sz) == 4);
             let size = array_to_usize(sz);
-            println!("message size: {}", size);
             self.size = size;
             self.msg = Some(ByteBuf::mut_with_capacity(size));
         }
 
         let mut msg = self.msg.take().unwrap();
-        println!("buf: {:?}", buf.bytes());
-        println!("msg: {:?}", msg.bytes());
-        println!("msg remaining: {}", msg.remaining());
+
         // read actual message
         buf.try_read_buf(&mut msg);
-        println!("buf: {:?}", buf.bytes());
-        println!("msg: {:?}", msg.bytes());
-        println!("msg remaining: {}", msg.remaining());
+
         // if we're done, return our Item
         match msg.bytes().len() == self.size {
             true => {
-                println!("4");
                 Some(msg.flip())
             },
             false => {
-                println!("5");
                 self.msg = Some(msg);
                 None
             },
@@ -108,16 +101,17 @@ mod tests {
     }
 
     fn framed_prop(sz: usize) -> bool {
+        if sz == 0 {
+            // TODO(tyler) currently, feeding an empty slice to 
+            // ByteBuf::from_slice causes a segfault...
+            return true;
+        }
         let mut rng = thread_rng();
         let mut v: Vec<u8> = rng.gen_iter::<u8>().take(sz).collect();
-        println!("vec: {:?}", v);
         let mut c = codec::Framed::new();
-        let bytes = ByteBuf::from_slice(&*v);
-        println!("bytes: {:?}", bytes.bytes());
+        let mut bytes = ByteBuf::from_slice(&*v);
         let mut encoded = codec::Framed::encode(bytes);
-        println!("encoded: {:?}", encoded.bytes());
         let decoded = c.decode(&mut encoded).unwrap();
-        println!("decoded: {:?}", decoded.bytes());
         decoded.bytes() == &*v
     }
 
