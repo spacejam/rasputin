@@ -13,7 +13,7 @@ pub trait Codec {
 
 pub struct Framed {
     msg: Option<MutByteBuf>,
-    size: usize,
+    remaining: usize,
 }
 
 impl Codec for Framed {
@@ -22,7 +22,7 @@ impl Codec for Framed {
     fn new() -> Framed {
         Framed {
             msg: None,
-            size: 0,
+            remaining: 0,
         }
     }
 
@@ -37,24 +37,25 @@ impl Codec for Framed {
             let mut sz = [0u8;4];
             assert!(buf.read_slice(&mut sz) == 4);
             let size = array_to_usize(sz);
-            self.size = size;
+            self.remaining = size;
             self.msg = Some(ByteBuf::mut_with_capacity(size));
         }
 
         let mut msg = self.msg.take().unwrap();
 
         // read actual message
-        buf.try_read_buf(&mut msg);
-
-        // if we're done, return our Item
-        match msg.bytes().len() == self.size {
-            true => {
-                Some(msg.flip())
+        match buf.try_read_buf(&mut msg) {
+            Ok(Some(read)) => {
+                self.remaining -= read;
+                // if we're done, return our Item
+                if self.remaining == 0 {
+                    Some(msg.flip())
+                } else {
+                    self.msg = Some(msg);
+                    None
+                }
             },
-            false => {
-                self.msg = Some(msg);
-                None
-            },
+            _ => None,
         }
     }
 
