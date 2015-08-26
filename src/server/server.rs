@@ -116,10 +116,14 @@ impl Handler for Server {
             println!("clearing error or hup connection");
             match token {
                 peer if peer.as_usize() >= 2 && peer.as_usize() <= 16 => {
-                    //self.peer_handler.conns.remove(token);
+                    if self.peer_handler.conns.contains(token) {
+                         self.peer_handler.conns.remove(token);
+                    }
                 },
                 cli if cli.as_usize() >= 1024 && cli.as_usize() <= 4096 => {
-                    //self.cli_handler.conns.remove(token);
+                    if self.cli_handler.conns.contains(token) {
+                        self.cli_handler.conns.remove(token);
+                    }
                 },
                 t => panic!("bad token for error/hup: {}", t.as_usize()),
             }
@@ -365,6 +369,11 @@ impl ConnSet {
     ) -> io::Result<()> {
 
         info!("ConnSet conn readable; tok={:?}", tok);
+        if !self.conns.contains(tok) {
+            error!("got conn_readable for non-existent token!");
+            return Ok(());
+        }
+
         self.conn(tok).readable(event_loop)
     }
 
@@ -373,6 +382,10 @@ impl ConnSet {
         event_loop: &mut EventLoop<Server>,
         tok: Token,
     ) -> io::Result<()> {
+        if !self.conns.contains(tok) {
+            error!("got conn_readable for non-existent token!");
+            return Ok(());
+        }
 
         info!("ConnSet conn writable; tok={:?}", tok);
         match self.conn(tok).writable(event_loop) {
