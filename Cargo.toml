@@ -21,3 +21,6 @@ bytes = "0.2.11"
 
 [dependencies.protobuf]
 git = "https://github.com/stepancheg/rust-protobuf.git"
+
+[dev-dependencies]
+quickcheck = "*"

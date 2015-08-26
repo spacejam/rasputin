@@ -1,4 +1,3 @@
-extern crate bytes;
 use std::io::{Error, ErrorKind};
 use std::io;
 use std::sync::mpsc::{self, Sender, Receiver};
@@ -6,7 +5,7 @@ use std::sync::mpsc::{self, Sender, Receiver};
 use mio::{EventLoop, EventSet, PollOpt, Handler, Token, TryWrite, TryRead};
 use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
-use self::bytes::{Buf, ByteBuf, MutByteBuf, SliceBuf};
+use bytes::{Buf, ByteBuf, MutByteBuf, SliceBuf};
 
 use ::{SrvReq, SrvRes, CliReq, CliRes};
 
@@ -195,7 +194,6 @@ struct ServerConn {
     req_buf: Option<ByteBuf>,
     req_mut_buf: Option<MutByteBuf>,
     res_buf: Option<ByteBuf>,
-    res_mut_buf: Option<MutByteBuf>,
     token: Option<Token>,
     interest: EventSet
 }
@@ -207,7 +205,6 @@ impl ServerConn {
             req_buf: None,
             req_mut_buf: Some(ByteBuf::mut_with_capacity(2048)),
             res_buf: None,
-            res_mut_buf: Some(ByteBuf::mut_with_capacity(2048)),
             token: None,
             interest: EventSet::hup()
         }
@@ -223,15 +220,10 @@ impl ServerConn {
         match self.sock.try_write_buf(&mut res_buf) {
             Ok(None) => {
                 info!("client flushing buf; WOULDBLOCK");
-
-                self.res_buf = Some(res_buf);
                 self.interest.insert(EventSet::writable());
             }
             Ok(Some(r)) => {
                 info!("CONN : we wrote {} bytes!", r);
-
-                self.res_mut_buf = Some(res_buf.flip());
-
                 self.interest.insert(EventSet::readable());
                 self.interest.remove(EventSet::writable());
             }
@@ -249,6 +241,8 @@ impl ServerConn {
                 return Err(e);
             },
         }
+
+        self.res_buf = Some(res_buf);
 
         event_loop.reregister(
             &self.sock,
@@ -277,6 +271,7 @@ impl ServerConn {
         };
 
         self.req_buf = Some(req_buf.flip());
+
         event_loop.channel().send(Envelope {
             id: 5,
             tok: self.token.unwrap(),

@@ -1,7 +1,20 @@
-# Rasputin DB :globe_with_meridians:
-High performance HA subscribable transactional KV store.
+# Rasputin DBL :globe_with_meridians:
 
-## Features
+High performance distributed transactional store and modules.
+
+Triumvirs: Stability, performance, and composability.
+
+In addition to a DB, Rasputin provides composable modules for:
+* membership
+* election
+* delegation
+* replication
+* persistence
+* subscription
+* aggregation
+
+## Roadmap
+- [*] mio event loops
 - [ ] consensus algorithm for distributed transactions
 - [ ] History Tree for allowing clients to receive a history of updates to an arbitrary subtree of the store.
 - [ ] rocksdb backed for persistence

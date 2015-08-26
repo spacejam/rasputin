@@ -16,11 +16,18 @@ pub use serialization::{
     SrvReq, SrvRes,
 };
 
+pub use codec::{
+    Codec,
+    Framed,
+};
+
+pub mod codec;
 pub mod server;
 pub mod serialization;
 pub mod logging;
 
 extern crate protobuf;
+extern crate bytes;
 extern crate mio;
 #[macro_use] extern crate log;
 extern crate time;
