@@ -1,4 +1,5 @@
 extern crate rustc_serialize;
+extern crate mio;
 extern crate docopt;
 #[macro_use]
 extern crate log;
@@ -8,6 +9,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use docopt::Docopt;
+use mio::{EventLoop};
 
 use rasputin::server::Server;
 
@@ -55,22 +57,28 @@ fn main() {
         .collect();
 
     let (thread_exit_tx, thread_exit_rx) = mpsc::channel();
-    let srv = Server::new(peer_port, cli_port, peers);
-    srv.and_then(|mut server|
-        Ok(thread::spawn(move || {
-            server.run_event_loop();
-            thread_exit_tx.send(());
-        }))
-    ).unwrap_or_else( |e| panic!("Could not start event loop: {}", e));
+    let (req_tx, req_rx) = mpsc::channel();
+    let mut srv = Server::new(peer_port, cli_port, peers, req_tx).unwrap();
+    let event_loop: EventLoop<Server> = EventLoop::new().unwrap();
+    let res_tx = event_loop.channel();
 
-    /*
-     let srv_processor = server.and_then(|mut server|
-            Ok(thread::spawn(move || {
-                server.run_processor();
-                thread_exit_tx.send(());
-            }))
-        ).unwrap_or_else( |e| panic!("Could not start processor: {}", e));
-        */
+    // io event loop thread
+    let tex1 = thread_exit_tx.clone();
+    thread::spawn(move || {
+        srv.run_event_loop(event_loop);
+        tex1.send(());
+    });
+
+    // request handler thread
+    let tex2 = thread_exit_tx.clone();
+    thread::spawn(move || {
+        for req_env in req_rx {
+            println!("got request!");
+            res_tx.send(req_env);
+        }
+        tex2.send(());
+    });
+
     
     thread_exit_rx.recv();
     error!("A worker thread unexpectedly exited! Shutting down.");

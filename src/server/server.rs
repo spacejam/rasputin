@@ -2,6 +2,7 @@ use std::io::{Error, ErrorKind};
 use std::io;
 use std::sync::mpsc::{self, Sender, Receiver};
 
+use mio;
 use mio::{EventLoop, EventSet, PollOpt, Handler, Token, TryWrite, TryRead};
 use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
@@ -29,10 +30,6 @@ pub struct Server {
     peers: Vec<String>,
     cli_handler: ConnSet,
     peer_handler: ConnSet,
-    req_tx: Sender<Envelope>,
-    req_rx: Receiver<Envelope>,
-    res_tx: Sender<Envelope>,
-    res_rx: Receiver<Envelope>,
 }
 
 impl Server {
@@ -40,6 +37,7 @@ impl Server {
         peer_port: u16,
         cli_port: u16,
         peers: Vec<String>,
+        req_tx: Sender<Envelope>,
     ) -> io::Result<Server> {
 
         let cli_addr =
@@ -52,32 +50,24 @@ impl Server {
         let peer_srv_sock =
             try!(TcpListener::bind(&peer_addr));
 
-        let (req_tx, req_rx) = mpsc::channel();
-        let (res_tx, res_rx) = mpsc::channel();
-
         Ok(Server {
             peers: peers,
             cli_handler: ConnSet {
                 srv_sock: cli_srv_sock,
                 srv_token: SERVER_CLIENTS,
                 conns: Slab::new_starting_at(Token(1024), 4096),
+                req_tx: req_tx.clone(),
             },
             peer_handler: ConnSet {
                 srv_sock: peer_srv_sock,
                 srv_token: SERVER_PEERS,
                 conns: Slab::new_starting_at(Token(2), 15),
+                req_tx: req_tx.clone(),
             },
-            req_tx: req_tx,
-            req_rx: req_rx,
-            res_tx: res_tx,
-            res_rx: res_rx,
         })
     }
 
-    pub fn run_event_loop(&mut self) -> io::Result<()> {
-
-        let mut event_loop = EventLoop::new().unwrap();
-
+    pub fn run_event_loop(&mut self, mut event_loop: EventLoop<Server>) -> io::Result<()> {
         event_loop.register_opt(
             &self.cli_handler.srv_sock,
             SERVER_CLIENTS,
@@ -96,13 +86,6 @@ impl Server {
 
         Err(Error::new(ErrorKind::Other, "event_loop shouldn't have returned."))
 
-    }
-
-    pub fn run_processor(&mut self) -> io::Result<()> {
-        for e in self.req_rx.iter() {
-
-        }
-        Err(Error::new(ErrorKind::Other, "processor shouldn't have returned."))
     }
 
     fn tok_to_sc(&mut self, tok: Token) -> Option<&mut ServerConn> {
@@ -191,6 +174,7 @@ impl Handler for Server {
 
 struct ServerConn {
     sock: TcpStream,
+    req_tx: Sender<Envelope>,
     req_buf: Option<ByteBuf>,
     req_mut_buf: Option<MutByteBuf>,
     res_buf: Option<ByteBuf>,
@@ -199,9 +183,10 @@ struct ServerConn {
 }
 
 impl ServerConn {
-    fn new(sock: TcpStream) -> ServerConn {
+    fn new(sock: TcpStream, req_tx: Sender<Envelope>) -> ServerConn {
         ServerConn {
             sock: sock,
+            req_tx: req_tx,
             req_buf: None,
             req_mut_buf: Some(ByteBuf::mut_with_capacity(2048)),
             res_buf: None,
@@ -272,7 +257,7 @@ impl ServerConn {
 
         self.req_buf = Some(req_buf.flip());
 
-        event_loop.channel().send(Envelope {
+        self.req_tx.send(Envelope {
             id: 5,
             tok: self.token.unwrap(),
             msg: Message::CliRes(CliRes::new()),
@@ -291,6 +276,7 @@ pub struct ConnSet {
     srv_sock: TcpListener,
     srv_token: Token,
     conns: Slab<ServerConn>,
+    req_tx: Sender<Envelope>,
 }
 
 impl ConnSet {
@@ -302,7 +288,7 @@ impl ConnSet {
         info!("ConnSet accepting socket");
 
         let sock = self.srv_sock.accept().unwrap().unwrap();
-        let conn = ServerConn::new(sock);
+        let conn = ServerConn::new(sock, self.req_tx.clone());
 
         // Re-register accepting socket
         event_loop.reregister(
