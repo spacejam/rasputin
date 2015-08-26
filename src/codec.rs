@@ -61,9 +61,10 @@ impl Codec for Framed {
 
     fn encode(item: Self::Item) -> ByteBuf {
         let b = item.bytes();
+        println!("encoding: {:?}", b);
         let mut res = ByteBuf::mut_with_capacity(4 + b.len());
-        res.write_slice(&usize_to_array(b.len()));
-        res.write_slice(b);
+        assert!(res.write_slice(&usize_to_array(b.len())) == 4);
+        assert!(res.write_slice(b) == b.len());
         res.flip()
     }
 }

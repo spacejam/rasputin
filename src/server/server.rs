@@ -9,6 +9,8 @@ use mio::util::Slab;
 use bytes::{Buf, ByteBuf, MutByteBuf, SliceBuf};
 
 use ::{SrvReq, SrvRes, CliReq, CliRes};
+use codec;
+use codec::Codec;
 
 const SERVER_CLIENTS: Token = Token(0);
 const SERVER_PEERS: Token = Token(1);
@@ -23,7 +25,7 @@ pub enum Message {
 pub struct Envelope {
     id: u64,
     tok: Token,
-    msg: Message,
+    msg: ByteBuf,
 }
 
 pub struct Server {
@@ -110,7 +112,20 @@ impl Handler for Server {
         token: Token,
         events: EventSet,
     ) {
-       if events.is_readable() {
+        if events.is_error() || events.is_hup() {
+            println!("clearing error or hup connection");
+            match token {
+                peer if peer.as_usize() >= 2 && peer.as_usize() <= 16 => {
+                    //self.peer_handler.conns.remove(token);
+                },
+                cli if cli.as_usize() >= 1024 && cli.as_usize() <= 4096 => {
+                    //self.cli_handler.conns.remove(token);
+                },
+                t => panic!("bad token for error/hup: {}", t.as_usize()),
+            }
+        }
+
+        if events.is_readable() {
             match token {
                 SERVER_PEERS => {
                     info!("got SERVER_PEERS accept");
@@ -151,18 +166,31 @@ impl Handler for Server {
         }
     }
 
-    fn notify(&mut self, event_loop: &mut EventLoop<Server>, msg: Envelope) {
+    fn notify(&mut self, event_loop: &mut EventLoop<Server>, mut msg: Envelope) {
         let mut sc = self.tok_to_sc(msg.tok).unwrap();
         // TODO(tyler) serialize <id> | <proto> and write to sc.res_buf
+        let m = msg.msg.bytes();
+        println!("msglen: {}", m.len());
+        println!("bytes: {:?}", m);
         if sc.res_buf.is_none() {
-            let mut rb = ByteBuf::mut_with_capacity(128);
-            rb.write_slice(b"<id> | <proto response>");
-            sc.res_buf = Some(rb.flip());
+            println!("1");
+
+            let mut res = ByteBuf::mut_with_capacity(4 + m.len());
+            assert!(res.write_slice(&codec::usize_to_array(m.len())) == 4);
+            assert!(res.write_slice(m) == m.len());
+            println!("sc.res_buf: {:?}", res.bytes());
+
+            sc.res_remaining += res.bytes().len();
+            sc.res_buf = Some(res.flip());
         } else {
+            println!("2");
+            // this shouldn't happen often, make a new one
+            // TODO(tyler) concat bufs
             let mut rb = sc.res_buf.take().unwrap().flip();
-            rb.write_slice(b"<id> | <proto response>");
+            rb.write_slice(b"<id> | <proto response>\n");
             sc.res_buf = Some(rb.flip());
         }
+        sc.interest.insert(EventSet::writable());
         event_loop.reregister(
             &sc.sock,
             msg.tok,
@@ -175,9 +203,10 @@ impl Handler for Server {
 struct ServerConn {
     sock: TcpStream,
     req_tx: Sender<Envelope>,
-    req_buf: Option<ByteBuf>,
     req_mut_buf: Option<MutByteBuf>,
     res_buf: Option<ByteBuf>,
+    res_remaining: usize,
+    req_codec: codec::Framed,
     token: Option<Token>,
     interest: EventSet
 }
@@ -187,9 +216,10 @@ impl ServerConn {
         ServerConn {
             sock: sock,
             req_tx: req_tx,
-            req_buf: None,
             req_mut_buf: Some(ByteBuf::mut_with_capacity(2048)),
+            req_codec: codec::Framed::new(),
             res_buf: None,
+            res_remaining: 0,
             token: None,
             interest: EventSet::hup()
         }
@@ -202,6 +232,7 @@ impl ServerConn {
         }
         let mut res_buf = self.res_buf.take().unwrap();
 
+        println!("res buf: {:?}", res_buf.bytes());
         match self.sock.try_write_buf(&mut res_buf) {
             Ok(None) => {
                 info!("client flushing buf; WOULDBLOCK");
@@ -209,8 +240,13 @@ impl ServerConn {
             }
             Ok(Some(r)) => {
                 info!("CONN : we wrote {} bytes!", r);
-                self.interest.insert(EventSet::readable());
-                self.interest.remove(EventSet::writable());
+                println!("remaining: {}", self.res_remaining);
+                self.res_remaining -= r;
+                if self.res_remaining == 0 {
+                    // we've written the whole response, now let's wait to read
+                    self.interest.insert(EventSet::readable());
+                    self.interest.remove(EventSet::writable());
+                }
             }
             Err(e) => {
                 match e.raw_os_error() {
@@ -226,6 +262,7 @@ impl ServerConn {
                 return Err(e);
             },
         }
+        self.interest.remove(EventSet::writable());
 
         self.res_buf = Some(res_buf);
 
@@ -238,7 +275,10 @@ impl ServerConn {
     }
 
     fn readable(&mut self, event_loop: &mut EventLoop<Server>) -> io::Result<()> {
-        let mut req_buf = self.req_mut_buf.take().unwrap();
+        let mut req_buf = match self.req_mut_buf {
+            Some(_) => self.req_mut_buf.take().unwrap(),
+            None => ByteBuf::mut_with_capacity(2048),
+        };
 
         match self.sock.try_read_buf(&mut req_buf) {
             Ok(None) => {
@@ -247,7 +287,6 @@ impl ServerConn {
             Ok(Some(r)) => {
                 info!("CONN : we read {} bytes!", r);
                 self.interest.remove(EventSet::readable());
-                self.interest.insert(EventSet::writable());
             }
             Err(e) => {
                 info!("not implemented; client err={:?}", e);
@@ -255,13 +294,20 @@ impl ServerConn {
             }
         };
 
-        self.req_buf = Some(req_buf.flip());
+        let mut rb = req_buf.flip();
+        match self.req_codec.decode(&mut rb) {
+            Some(req) => {
+                self.req_tx.send(Envelope {
+                    id: 5,
+                    tok: self.token.unwrap(),
+                    msg: req,
+                });
+            },
+            None => {},
+        }
 
-        self.req_tx.send(Envelope {
-            id: 5,
-            tok: self.token.unwrap(),
-            msg: Message::CliRes(CliRes::new()),
-        });
+        // TODO(tyler) this will get filled up quickly, move over remaining bytes after req
+        self.req_mut_buf = Some(rb.flip());
 
         event_loop.reregister(
             &self.sock,
@@ -331,7 +377,8 @@ impl ConnSet {
         info!("ConnSet conn writable; tok={:?}", tok);
         match self.conn(tok).writable(event_loop) {
             Err(e) => {
-                self.conns.remove(tok);
+                println!("got err in ConnSet conn_writable: {}", e);
+                // now being done in server top level // self.conns.remove(tok);
                 Err(e)
             },
             w => w,
