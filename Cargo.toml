@@ -23,4 +23,5 @@ bytes = "0.2.11"
 git = "https://github.com/stepancheg/rust-protobuf.git"
 
 [dev-dependencies]
+rand = "0.3"
 quickcheck = "*"
