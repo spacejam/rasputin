@@ -1,8 +1,6 @@
 #![crate_id = "rasputin"]
 #![crate_type = "lib"]
 
-pub use server::store::Store;
-pub use server::paxos::Parliament;
 pub use serialization::{
     VersionedKV,
     SetReq, SetRes,

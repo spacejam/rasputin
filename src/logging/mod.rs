@@ -9,11 +9,13 @@ use log::{self, LogRecord, LogLevel, LogMetadata, LogLevelFilter,
           SetLoggerError};
 use time;
 
-struct StdoutLogger;
+struct StdoutLogger {
+    level: LogLevel,
+}
 
 impl log::Log for StdoutLogger {
     fn enabled(&self, metadata: &LogMetadata) -> bool {
-        metadata.level() <= LogLevel::Info
+        metadata.level() <= self.level
     }
 
     fn log(&self, record: &LogRecord) {
@@ -28,10 +30,11 @@ impl log::Log for StdoutLogger {
 
 struct FileLogger {
     file: Arc<Mutex<File>>,
+    level: LogLevel,
 }
 
 impl FileLogger {
-    pub fn new(path: &str) -> Result<FileLogger, Error> {
+    pub fn new(path: &str, level: LogLevel) -> Result<FileLogger, Error> {
         let ospath = Path::new(path).parent();
         if ospath.is_none() {
             return Err(Error::new(
@@ -51,7 +54,8 @@ impl FileLogger {
         OpenOptions::new()
             .create(true).write(true).append(true).open(path).map( |file| {
                 FileLogger{
-                    file: Arc::new(Mutex::new(file))
+                    file: Arc::new(Mutex::new(file)),
+                    level: level,
                 }
             })
     }
@@ -59,7 +63,7 @@ impl FileLogger {
 
 impl log::Log for FileLogger {
     fn enabled(&self, metadata: &LogMetadata) -> bool {
-        metadata.level() <= LogLevel::Info
+        metadata.level() <= self.level
     }
 
     fn log(&self, record: &LogRecord) {
@@ -75,14 +79,14 @@ impl log::Log for FileLogger {
     }
 }
 
-pub fn init_logger(path: Option<String>) -> Result<(), SetLoggerError> {
+pub fn init_logger(path: Option<String>, level: LogLevel) -> Result<(), SetLoggerError> {
     let logger: Box<log::Log> = match path {
-        Some(p) => Box::new(FileLogger::new(p.trim_left()).unwrap()),
-        None => Box::new(StdoutLogger)
+        Some(p) => Box::new(FileLogger::new(p.trim_left(), level).unwrap()),
+        None => Box::new(StdoutLogger{ level: level })
     };
 
     log::set_logger(|max_log_level| {
-        max_log_level.set(LogLevelFilter::Info);
+        max_log_level.set(LogLevelFilter::Debug);
         logger
     })
 }

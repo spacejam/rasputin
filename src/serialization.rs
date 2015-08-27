@@ -6210,3 +6210,13 @@ pub fn file_descriptor_proto() -> &'static ::protobuf::descriptor::FileDescripto
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serialization::CliReq;
+
+    #[test]
+    fn test_serialize() {
+        let cr = CliReq::new();
+    }
+}

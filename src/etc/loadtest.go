@@ -4,20 +4,29 @@ import (
 	"bufio"
 	"fmt"
 	"net"
-	"os"
+	"runtime"
+
+	"github.com/spacejam/loghisto"
 )
 
-func main() {
-	conn, err := net.Dial("tcp", "localhost:7771")
+func benchmark() {
+	conn, err := net.Dial("tcp", "localhost:8880")
 	if err != nil {
 		fmt.Errorf("could not connect: %v", err)
-		os.Exit(1)
+		return
 	}
 	fmt.Fprintf(conn, "\x00\x00\x00\x03yo\n")
-	status, err := bufio.NewReader(conn).ReadString('\n')
+	_, err = bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
 		fmt.Errorf("could not read response: %v", err)
-		os.Exit(1)
+		return
 	}
-	fmt.Printf("got response: %s\n", status)
+}
+
+func main() {
+	numCPU := runtime.NumCPU()
+	runtime.GOMAXPROCS(numCPU)
+
+	desiredConcurrency := uint(10)
+	loghisto.PrintBenchmark("benchmark1234", desiredConcurrency, benchmark)
 }

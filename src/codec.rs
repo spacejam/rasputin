@@ -5,10 +5,11 @@ use bytes::{MutByteBuf, ByteBuf, Buf, MutBuf};
 use mio::{TryWrite, TryRead};
 
 pub trait Codec {
-    type Item;
+    type In;
+    type Out;
     fn new() -> Self;
-    fn decode(&mut self, buf: &mut ByteBuf) -> Option<Self::Item>;
-    fn encode(a: Self::Item) -> ByteBuf;
+    fn decode(&mut self, buf: &mut ByteBuf) -> Option<Self::In>;
+    fn encode(a: Self::Out) -> ByteBuf;
 }
 
 pub struct Framed {
@@ -17,7 +18,8 @@ pub struct Framed {
 }
 
 impl Codec for Framed {
-    type Item = ByteBuf;
+    type In = ByteBuf;
+    type Out = ByteBuf;
 
     fn new() -> Framed {
         Framed {
@@ -26,7 +28,7 @@ impl Codec for Framed {
         }
     }
 
-    fn decode(&mut self, buf: &mut ByteBuf) -> Option<Self::Item> {
+    fn decode(&mut self, buf: &mut ByteBuf) -> Option<Self::In> {
         // we haven't received enough bytes for the size, don't consume any
         if self.msg.is_none() && buf.bytes().len() < 4 {
             return None;
@@ -59,7 +61,7 @@ impl Codec for Framed {
         }
     }
 
-    fn encode(item: Self::Item) -> ByteBuf {
+    fn encode(item: Self::Out) -> ByteBuf {
         let b = item.bytes();
         println!("encoding: {:?}", b);
         let mut res = ByteBuf::mut_with_capacity(4 + b.len());

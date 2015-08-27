@@ -5,9 +5,7 @@ extern crate docopt;
 extern crate log;
 extern crate rasputin;
 
-use std::sync::mpsc;
-use std::thread;
-
+use log::LogLevel;
 use docopt::Docopt;
 use mio::{EventLoop};
 
@@ -37,7 +35,7 @@ fn main() {
         .and_then(|d| d.decode())
         .unwrap_or_else(|e| e.exit());
 
-    rasputin::logging::init_logger(args.flag_logfile).unwrap();
+    rasputin::logging::init_logger(args.flag_logfile, LogLevel::Debug).unwrap();
     print_banner();
 
     let peer_port: u16 = match args.flag_peer_port {
@@ -56,31 +54,7 @@ fn main() {
         .filter(|s| s != "")
         .collect();
 
-    let (thread_exit_tx, thread_exit_rx) = mpsc::channel();
-    let (req_tx, req_rx) = mpsc::channel();
-    let mut srv = Server::new(peer_port, cli_port, peers, req_tx).unwrap();
-    let event_loop: EventLoop<Server> = EventLoop::new().unwrap();
-    let res_tx = event_loop.channel();
-
-    // io event loop thread
-    let tex1 = thread_exit_tx.clone();
-    thread::spawn(move || {
-        srv.run_event_loop(event_loop);
-        tex1.send(());
-    });
-
-    // request handler thread
-    let tex2 = thread_exit_tx.clone();
-    thread::spawn(move || {
-        for req_env in req_rx {
-            println!("got request!");
-            res_tx.send(req_env);
-        }
-        tex2.send(());
-    });
-
-    
-    thread_exit_rx.recv();
+    Server::new(peer_port, cli_port, peers).run();
     error!("A worker thread unexpectedly exited! Shutting down.");
 }
 

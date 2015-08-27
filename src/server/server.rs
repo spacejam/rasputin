@@ -1,6 +1,7 @@
 use std::io::{Error, ErrorKind};
 use std::io;
 use std::sync::mpsc::{self, Sender, Receiver};
+use std::thread;
 
 use mio;
 use mio::{EventLoop, EventSet, PollOpt, Handler, Token, TryWrite, TryRead};
@@ -15,6 +16,68 @@ use codec::Codec;
 const SERVER_CLIENTS: Token = Token(0);
 const SERVER_PEERS: Token = Token(1);
 
+pub struct Server {
+    peer_port: u16,
+    cli_port: u16,
+    peers: Vec<String>,
+}
+
+impl Server {
+    pub fn new(peer_port: u16, cli_port: u16, peers: Vec<String>) -> Server {
+        Server {
+            peer_port: peer_port,
+            cli_port: cli_port,
+            peers: peers,
+        }
+    }
+
+    pub fn run(self) {
+        // All long-running worker threads get a clone of this
+        // Sender.  When they exit, they send over it.  If the
+        // Receiver ever completes a read, it means something 
+        // unexpectedly exited.  It's vital that we shut down
+        // immediately, so we don't repeat the ZK bug where
+        // the heartbeater keeps running while other vital threads
+        // have exited, falsely communicating healthiness.
+        let (thread_exit_tx, thread_exit_rx) = mpsc::channel();
+
+        // The TrafficCop manages our sockets, sends deserialized
+        // messages over the request channel, and receives completed
+        // responses over the response channel.
+        let (req_tx, req_rx) = mpsc::channel();
+
+        let mut tc = TrafficCop::new(
+            self.peer_port,
+            self.cli_port,
+            self.peers,
+            req_tx,
+        ).unwrap();
+
+        let event_loop: EventLoop<TrafficCop> = EventLoop::new().unwrap();
+        let res_tx = event_loop.channel();
+
+        // io event loop thread
+        let tex1 = thread_exit_tx.clone();
+        thread::spawn(move || {
+            tc.run_event_loop(event_loop);
+            tex1.send(());
+        });
+
+        // request handler thread
+        let tex2 = thread_exit_tx.clone();
+        thread::spawn(move || {
+            for req_env in req_rx {
+                debug!("got request!");
+                res_tx.send(req_env);
+            }
+            tex2.send(());
+        });
+
+        // this should never receive
+        thread_exit_rx.recv();
+    }
+}
+
 pub enum Message {
     PeerReq(SrvReq),
     PeerRes(SrvRes),
@@ -28,31 +91,33 @@ pub struct Envelope {
     msg: ByteBuf,
 }
 
-pub struct Server {
+pub struct TrafficCop {
     peers: Vec<String>,
     cli_handler: ConnSet,
     peer_handler: ConnSet,
 }
 
-impl Server {
+impl TrafficCop {
     pub fn new(
         peer_port: u16,
         cli_port: u16,
         peers: Vec<String>,
         req_tx: Sender<Envelope>,
-    ) -> io::Result<Server> {
+    ) -> io::Result<TrafficCop> {
 
         let cli_addr =
             format!("0.0.0.0:{}", cli_port).parse().unwrap();
+        info!("binding to {} for client connections", cli_addr);
         let cli_srv_sock =
             try!(TcpListener::bind(&cli_addr));
 
         let peer_addr =
             format!("0.0.0.0:{}", peer_port).parse().unwrap();
+        info!("binding to {} for peer connections", peer_addr);
         let peer_srv_sock =
             try!(TcpListener::bind(&peer_addr));
 
-        Ok(Server {
+        Ok(TrafficCop {
             peers: peers,
             cli_handler: ConnSet {
                 srv_sock: cli_srv_sock,
@@ -69,7 +134,7 @@ impl Server {
         })
     }
 
-    pub fn run_event_loop(&mut self, mut event_loop: EventLoop<Server>) -> io::Result<()> {
+    pub fn run_event_loop(&mut self, mut event_loop: EventLoop<TrafficCop>) -> io::Result<()> {
         event_loop.register_opt(
             &self.cli_handler.srv_sock,
             SERVER_CLIENTS,
@@ -102,18 +167,18 @@ impl Server {
     }
 }
 
-impl Handler for Server {
+impl Handler for TrafficCop {
     type Timeout = ();
     type Message = Envelope;
 
     fn ready(
         &mut self,
-        event_loop: &mut EventLoop<Server>,
+        event_loop: &mut EventLoop<TrafficCop>,
         token: Token,
         events: EventSet,
     ) {
-        if events.is_error() || events.is_hup() {
-            println!("clearing error or hup connection");
+        if events.is_hup() || events.is_error() {
+            debug!("clearing error or hup connection");
             match token {
                 peer if peer.as_usize() >= 2 && peer.as_usize() <= 16 => {
                     if self.peer_handler.conns.contains(token) {
@@ -170,24 +235,29 @@ impl Handler for Server {
         }
     }
 
-    fn notify(&mut self, event_loop: &mut EventLoop<Server>, mut msg: Envelope) {
-        let mut sc = self.tok_to_sc(msg.tok).unwrap();
+    fn notify(&mut self, event_loop: &mut EventLoop<TrafficCop>, mut msg: Envelope) {
+        let sco = self.tok_to_sc(msg.tok);
+        if sco.is_none() {
+            warn!("got notify for invalid token {}", msg.tok.as_usize());
+            return;
+        }
+        let mut sc = sco.unwrap();
         // TODO(tyler) serialize <id> | <proto> and write to sc.res_buf
         let m = msg.msg.bytes();
-        println!("msglen: {}", m.len());
-        println!("bytes: {:?}", m);
+        debug!("msglen: {}", m.len());
+        debug!("bytes: {:?}", m);
         if sc.res_buf.is_none() {
-            println!("1");
+            debug!("1");
 
             let mut res = ByteBuf::mut_with_capacity(4 + m.len());
             assert!(res.write_slice(&codec::usize_to_array(m.len())) == 4);
             assert!(res.write_slice(m) == m.len());
-            println!("sc.res_buf: {:?}", res.bytes());
+            debug!("sc.res_buf: {:?}", res.bytes());
 
             sc.res_remaining += res.bytes().len();
             sc.res_buf = Some(res.flip());
         } else {
-            println!("2");
+            debug!("2");
             // this shouldn't happen often, make a new one
             // TODO(tyler) concat bufs
             let mut rb = sc.res_buf.take().unwrap().flip();
@@ -229,14 +299,14 @@ impl ServerConn {
         }
     }
 
-    fn writable(&mut self, event_loop: &mut EventLoop<Server>) -> io::Result<()> {
+    fn writable(&mut self, event_loop: &mut EventLoop<TrafficCop>) -> io::Result<()> {
         if self.res_buf.is_none() {
             // no responses yet, don't reregister
             return Ok(())
         }
         let mut res_buf = self.res_buf.take().unwrap();
 
-        println!("res buf: {:?}", res_buf.bytes());
+        debug!("res buf: {:?}", res_buf.bytes());
         match self.sock.try_write_buf(&mut res_buf) {
             Ok(None) => {
                 info!("client flushing buf; WOULDBLOCK");
@@ -244,12 +314,12 @@ impl ServerConn {
             }
             Ok(Some(r)) => {
                 info!("CONN : we wrote {} bytes!", r);
-                println!("remaining: {}", self.res_remaining);
+                debug!("remaining: {}", self.res_remaining);
                 self.res_remaining -= r;
                 if self.res_remaining == 0 {
                     // we've written the whole response, now let's wait to read
                     self.interest.insert(EventSet::readable());
-                    self.interest.remove(EventSet::writable());
+                    //T self.interest.remove(EventSet::writable());
                 }
             }
             Err(e) => {
@@ -266,7 +336,7 @@ impl ServerConn {
                 return Err(e);
             },
         }
-        self.interest.remove(EventSet::writable());
+        //T self.interest.remove(EventSet::writable());
 
         self.res_buf = Some(res_buf);
 
@@ -278,7 +348,7 @@ impl ServerConn {
         )
     }
 
-    fn readable(&mut self, event_loop: &mut EventLoop<Server>) -> io::Result<()> {
+    fn readable(&mut self, event_loop: &mut EventLoop<TrafficCop>) -> io::Result<()> {
         let mut req_buf = match self.req_mut_buf {
             Some(_) => self.req_mut_buf.take().unwrap(),
             None => ByteBuf::mut_with_capacity(2048),
@@ -290,7 +360,7 @@ impl ServerConn {
             }
             Ok(Some(r)) => {
                 info!("CONN : we read {} bytes!", r);
-                self.interest.remove(EventSet::readable());
+                //T self.interest.remove(EventSet::readable());
             }
             Err(e) => {
                 info!("not implemented; client err={:?}", e);
@@ -332,13 +402,13 @@ pub struct ConnSet {
 impl ConnSet {
     fn accept(
         &mut self,
-        event_loop: &mut EventLoop<Server>,
+        event_loop: &mut EventLoop<TrafficCop>,
     ) -> io::Result<()> {
 
         info!("ConnSet accepting socket");
 
-        let sock = self.srv_sock.accept().unwrap().unwrap();
-        let conn = ServerConn::new(sock, self.req_tx.clone());
+        let sock = try!(self.srv_sock.accept());
+        let conn = ServerConn::new(sock.unwrap(), self.req_tx.clone());
 
         // Re-register accepting socket
         event_loop.reregister(
@@ -364,7 +434,7 @@ impl ConnSet {
 
     fn conn_readable(
         &mut self,
-        event_loop: &mut EventLoop<Server>,
+        event_loop: &mut EventLoop<TrafficCop>,
         tok: Token,
     ) -> io::Result<()> {
 
@@ -379,18 +449,18 @@ impl ConnSet {
 
     fn conn_writable(
         &mut self,
-        event_loop: &mut EventLoop<Server>,
+        event_loop: &mut EventLoop<TrafficCop>,
         tok: Token,
     ) -> io::Result<()> {
         if !self.conns.contains(tok) {
-            error!("got conn_readable for non-existent token!");
+            error!("got conn_writable for non-existent token!");
             return Ok(());
         }
 
         info!("ConnSet conn writable; tok={:?}", tok);
         match self.conn(tok).writable(event_loop) {
             Err(e) => {
-                println!("got err in ConnSet conn_writable: {}", e);
+                debug!("got err in ConnSet conn_writable: {}", e);
                 // now being done in server top level // self.conns.remove(tok);
                 Err(e)
             },
