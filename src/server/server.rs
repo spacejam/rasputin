@@ -7,7 +7,7 @@ use mio;
 use mio::{EventLoop, EventSet, PollOpt, Handler, Token, TryWrite, TryRead};
 use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
-use bytes::{Buf, ByteBuf, MutByteBuf, SliceBuf};
+use bytes::{alloc, Buf, ByteBuf, MutByteBuf, SliceBuf};
 
 use ::{SrvReq, SrvRes, CliReq, CliRes};
 use codec;
@@ -75,6 +75,9 @@ impl Server {
 
         // this should never receive
         thread_exit_rx.recv();
+        let msg = "A worker thread unexpectedly exited! Shutting down.";
+        error!("{}", msg);
+        panic!("A worker thread unexpectedly exited! Shutting down.");
     }
 }
 
@@ -98,6 +101,7 @@ pub struct TrafficCop {
 }
 
 impl TrafficCop {
+
     pub fn new(
         peer_port: u16,
         cli_port: u16,
@@ -134,7 +138,11 @@ impl TrafficCop {
         })
     }
 
-    pub fn run_event_loop(&mut self, mut event_loop: EventLoop<TrafficCop>) -> io::Result<()> {
+    pub fn run_event_loop(
+        &mut self,
+        mut event_loop: EventLoop<TrafficCop>,
+    ) -> io::Result<()> {
+
         event_loop.register_opt(
             &self.cli_handler.srv_sock,
             SERVER_CLIENTS,
@@ -247,9 +255,18 @@ impl Handler for TrafficCop {
         debug!("msglen: {}", m.len());
         debug!("bytes: {:?}", m);
         if sc.res_buf.is_none() {
-            debug!("1");
+            debug!("sc.res_buf is none");
 
-            let mut res = ByteBuf::mut_with_capacity(4 + m.len());
+            let size = 4 + m.len();
+            let mut res = unsafe {
+                ByteBuf::from_mem_ref(
+                    alloc::heap(size.next_power_of_two()),
+                    size as u32, // cap
+                    0,           // pos
+                    size as u32  // lim
+                ).flip()
+            };
+
             assert!(res.write_slice(&codec::usize_to_array(m.len())) == 4);
             assert!(res.write_slice(m) == m.len());
             debug!("sc.res_buf: {:?}", res.bytes());
@@ -257,7 +274,7 @@ impl Handler for TrafficCop {
             sc.res_remaining += res.bytes().len();
             sc.res_buf = Some(res.flip());
         } else {
-            debug!("2");
+            debug!("sc.res_buf is some :(");
             // this shouldn't happen often, make a new one
             // TODO(tyler) concat bufs
             let mut rb = sc.res_buf.take().unwrap().flip();
@@ -277,7 +294,6 @@ impl Handler for TrafficCop {
 struct ServerConn {
     sock: TcpStream,
     req_tx: Sender<Envelope>,
-    req_mut_buf: Option<MutByteBuf>,
     res_buf: Option<ByteBuf>,
     res_remaining: usize,
     req_codec: codec::Framed,
@@ -290,7 +306,6 @@ impl ServerConn {
         ServerConn {
             sock: sock,
             req_tx: req_tx,
-            req_mut_buf: Some(ByteBuf::mut_with_capacity(2048)),
             req_codec: codec::Framed::new(),
             res_buf: None,
             res_remaining: 0,
@@ -314,12 +329,12 @@ impl ServerConn {
             }
             Ok(Some(r)) => {
                 info!("CONN : we wrote {} bytes!", r);
-                debug!("remaining: {}", self.res_remaining);
                 self.res_remaining -= r;
+                debug!("remaining: {}", self.res_remaining);
                 if self.res_remaining == 0 {
                     // we've written the whole response, now let's wait to read
                     self.interest.insert(EventSet::readable());
-                    //T self.interest.remove(EventSet::writable());
+                    self.interest.remove(EventSet::writable());
                 }
             }
             Err(e) => {
@@ -338,7 +353,10 @@ impl ServerConn {
         }
         //T self.interest.remove(EventSet::writable());
 
-        self.res_buf = Some(res_buf);
+        self.res_buf = match res_buf.remaining() {
+            0 => None,
+            _ => Some(res_buf),
+        };
 
         event_loop.reregister(
             &self.sock,
@@ -349,10 +367,9 @@ impl ServerConn {
     }
 
     fn readable(&mut self, event_loop: &mut EventLoop<TrafficCop>) -> io::Result<()> {
-        let mut req_buf = match self.req_mut_buf {
-            Some(_) => self.req_mut_buf.take().unwrap(),
-            None => ByteBuf::mut_with_capacity(2048),
-        };
+
+        // TODO(tyler) get rid of this double copying and read directly to codec
+        let mut req_buf = ByteBuf::mut_with_capacity(1024);
 
         match self.sock.try_read_buf(&mut req_buf) {
             Ok(None) => {
@@ -368,8 +385,7 @@ impl ServerConn {
             }
         };
 
-        let mut rb = req_buf.flip();
-        match self.req_codec.decode(&mut rb) {
+        match self.req_codec.decode(&mut req_buf.flip()) {
             Some(req) => {
                 self.req_tx.send(Envelope {
                     id: 5,
@@ -380,14 +396,11 @@ impl ServerConn {
             None => {},
         }
 
-        // TODO(tyler) this will get filled up quickly, move over remaining bytes after req
-        self.req_mut_buf = Some(rb.flip());
-
         event_loop.reregister(
             &self.sock,
             self.token.unwrap(),
             self.interest,
-            PollOpt::edge(),
+            PollOpt::edge() | PollOpt::oneshot(),
         )
     }
 }

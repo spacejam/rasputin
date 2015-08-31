@@ -35,7 +35,7 @@ fn main() {
         .and_then(|d| d.decode())
         .unwrap_or_else(|e| e.exit());
 
-    rasputin::logging::init_logger(args.flag_logfile, LogLevel::Debug).unwrap();
+    rasputin::logging::init_logger(args.flag_logfile, LogLevel::Error).unwrap();
     print_banner();
 
     let peer_port: u16 = match args.flag_peer_port {
@@ -55,7 +55,6 @@ fn main() {
         .collect();
 
     Server::new(peer_port, cli_port, peers).run();
-    error!("A worker thread unexpectedly exited! Shutting down.");
 }
 
 #[derive(Debug, RustcDecodable)]

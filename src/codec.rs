@@ -1,7 +1,7 @@
 use std::io;
 use std::mem;
 
-use bytes::{MutByteBuf, ByteBuf, Buf, MutBuf};
+use bytes::{alloc, MutByteBuf, ByteBuf, Buf, MutBuf};
 use mio::{TryWrite, TryRead};
 
 pub trait Codec {
@@ -13,8 +13,8 @@ pub trait Codec {
 }
 
 pub struct Framed {
+    sz_buf: MutByteBuf,
     msg: Option<MutByteBuf>,
-    remaining: usize,
 }
 
 impl Codec for Framed {
@@ -23,24 +23,36 @@ impl Codec for Framed {
 
     fn new() -> Framed {
         Framed {
+            sz_buf: ByteBuf::mut_with_capacity(4),
             msg: None,
-            remaining: 0,
         }
     }
 
     fn decode(&mut self, buf: &mut ByteBuf) -> Option<Self::In> {
-        // we haven't received enough bytes for the size, don't consume any
-        if self.msg.is_none() && buf.bytes().len() < 4 {
-            return None;
+        // read size if we don't have a message yet
+        if self.msg.is_none() {
+            // TODO(tyler) incrementally build size, or this will explode
+            let sz_read = buf.try_read_buf(&mut self.sz_buf);
+            debug!("read {} bytes into the sz buffer", sz_read.unwrap().unwrap());
+            // if we've read 4 bytes for the size, create a msg
+            if self.sz_buf.remaining() != 0 {
+                return None;
+            }
+
+            let sz_buf = self.sz_buf.bytes();
+            let size = array_to_usize([sz_buf[0], sz_buf[1], sz_buf[2], sz_buf[3]]);
+            self.msg = unsafe {
+                Some(ByteBuf::from_mem_ref(
+                    alloc::heap(size.next_power_of_two()),
+                    size as u32, // cap
+                    0,           // pos
+                    size as u32  // lim
+                ).flip())
+            };
         }
 
-        // read the size if we need to
         if self.msg.is_none() {
-            let mut sz = [0u8;4];
-            assert!(buf.read_slice(&mut sz) == 4);
-            let size = array_to_usize(sz);
-            self.remaining = size;
-            self.msg = Some(ByteBuf::mut_with_capacity(size));
+            return None;
         }
 
         let mut msg = self.msg.take().unwrap();
@@ -48,9 +60,11 @@ impl Codec for Framed {
         // read actual message
         match buf.try_read_buf(&mut msg) {
             Ok(Some(read)) => {
-                self.remaining -= read;
                 // if we're done, return our Item
-                if self.remaining == 0 {
+                if msg.remaining() == 0 {
+                    // get ready to read a new size
+                    self.sz_buf.clear();
+                    // return the message
                     Some(msg.flip())
                 } else {
                     self.msg = Some(msg);
@@ -106,7 +120,7 @@ mod tests {
 
     fn framed_prop(sz: usize) -> bool {
         if sz == 0 {
-            // TODO(tyler) currently, feeding an empty slice to 
+            // TODO(tyler) currently, feeding an empty slice to
             // ByteBuf::from_slice causes a segfault...
             return true;
         }
