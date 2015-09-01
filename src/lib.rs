@@ -29,3 +29,4 @@ extern crate bytes;
 extern crate mio;
 #[macro_use] extern crate log;
 extern crate time;
+extern crate rand;

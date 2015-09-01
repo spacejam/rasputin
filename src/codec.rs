@@ -1,34 +1,60 @@
 use std::io;
 use std::mem;
+use std::ops::Add;
 
 use bytes::{alloc, MutByteBuf, ByteBuf, Buf, MutBuf};
 use mio::{TryWrite, TryRead};
 
-pub trait Codec {
-    type In;
-    type Out;
-    fn new() -> Self;
-    fn decode(&mut self, buf: &mut ByteBuf) -> Option<Self::In>;
-    fn encode(a: Self::Out) -> ByteBuf;
+pub trait Codec<In, Out> {
+    fn decode(&mut self, buf: &mut In) -> Option<Out>;
+    fn encode(&self, a: Out) -> In;
 }
+
+/*
+impl <InL, OutL, InR, OutR> Add<Codec<InR, OutR>> for Codec<InL, OutL> {
+    type Output = Codec<InL, OutR>;
+
+    fn add(self, right: Codec<InR, OutR>) -> Codec<InL, OutR> {
+        CodecStack {
+            left: self,
+            right: right,
+        }
+    }
+}
+
+pub struct CodecStack<'a, InL, OutL, InR, OutR> {
+    left: &'a Codec<InL, OutL>,
+    right: &'a Codec<InR, OutR>,
+}
+
+impl <'a, InL, OutL, InR, OutR> Codec<InL, OutR> for CodecStack<'a, InL, OutL, InR, OutR> {
+    fn decode(&mut self, buf: &mut InR) -> Option<OutL> {
+        self.left.decode.map(|d| self.right.decode(d))
+    }
+
+    fn encode(&self, out: OutR) -> InL {
+        self.left.encode(self.right.encode(out))
+    }
+}
+*/
 
 pub struct Framed {
     sz_buf: MutByteBuf,
     msg: Option<MutByteBuf>,
 }
 
-impl Codec for Framed {
-    type In = ByteBuf;
-    type Out = ByteBuf;
-
-    fn new() -> Framed {
+impl Framed {
+    pub fn new() -> Framed {
         Framed {
             sz_buf: ByteBuf::mut_with_capacity(4),
             msg: None,
         }
     }
+}
 
-    fn decode(&mut self, buf: &mut ByteBuf) -> Option<Self::In> {
+impl Codec<ByteBuf, ByteBuf> for Framed {
+
+    fn decode(&mut self, buf: &mut ByteBuf) -> Option<ByteBuf> {
         // read size if we don't have a message yet
         if self.msg.is_none() {
             // TODO(tyler) incrementally build size, or this will explode
@@ -75,7 +101,7 @@ impl Codec for Framed {
         }
     }
 
-    fn encode(item: Self::Out) -> ByteBuf {
+    fn encode(&self, item: ByteBuf) -> ByteBuf {
         let b = item.bytes();
         println!("encoding: {:?}", b);
         let mut res = ByteBuf::mut_with_capacity(4 + b.len());
@@ -99,9 +125,7 @@ pub fn array_to_usize(ip: [u8;4]) -> usize {
 #[cfg(test)]
 mod tests {
     extern crate quickcheck;
-    extern crate rand;
-    use self::rand::thread_rng;
-    use self::rand::Rng;
+    use rand::{Rng, thread_rng};
 
     use codec;
     use codec::Codec;

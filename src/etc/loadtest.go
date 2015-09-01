@@ -26,7 +26,7 @@ func main() {
 	runtime.GOMAXPROCS(numCPU)
 
 	fire := make(chan struct{})
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 8; i++ {
 		go func() {
 			conn, err := net.Dial("tcp", "localhost:8880")
 			if err != nil {

@@ -35,7 +35,7 @@ fn main() {
         .and_then(|d| d.decode())
         .unwrap_or_else(|e| e.exit());
 
-    rasputin::logging::init_logger(args.flag_logfile, LogLevel::Error).unwrap();
+    rasputin::logging::init_logger(args.flag_logfile, LogLevel::Debug).unwrap();
     print_banner();
 
     let peer_port: u16 = match args.flag_peer_port {

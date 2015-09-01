@@ -1,13 +1,16 @@
 use std::io::{Error, ErrorKind};
 use std::io;
+use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::mpsc::{self, Sender, Receiver};
 use std::thread;
 
+use bytes::{alloc, Buf, ByteBuf, MutByteBuf, SliceBuf};
 use mio;
 use mio::{EventLoop, EventSet, PollOpt, Handler, Token, TryWrite, TryRead};
-use mio::tcp::{TcpListener, TcpStream};
+use mio::tcp::{TcpListener, TcpStream, TcpSocket};
 use mio::util::Slab;
-use bytes::{alloc, Buf, ByteBuf, MutByteBuf, SliceBuf};
+use rand::{Rng, thread_rng};
 
 use ::{SrvReq, SrvRes, CliReq, CliRes};
 use codec;
@@ -34,7 +37,7 @@ impl Server {
     pub fn run(self) {
         // All long-running worker threads get a clone of this
         // Sender.  When they exit, they send over it.  If the
-        // Receiver ever completes a read, it means something 
+        // Receiver ever completes a read, it means something
         // unexpectedly exited.  It's vital that we shut down
         // immediately, so we don't repeat the ZK bug where
         // the heartbeater keeps running while other vital threads
@@ -53,8 +56,12 @@ impl Server {
             req_tx,
         ).unwrap();
 
-        let event_loop: EventLoop<TrafficCop> = EventLoop::new().unwrap();
+        let mut event_loop: EventLoop<TrafficCop> = EventLoop::new().unwrap();
         let res_tx = event_loop.channel();
+
+        // start server periodic tasks
+        let mut rng = thread_rng();
+        event_loop.timeout_ms((), rng.gen_range(200,500)).unwrap();
 
         // io event loop thread
         let tex1 = thread_exit_tx.clone();
@@ -94,8 +101,13 @@ pub struct Envelope {
     msg: ByteBuf,
 }
 
+pub struct Peer {
+    addr: SocketAddr,
+    sock: Option<Token>,
+}
+
 pub struct TrafficCop {
-    peers: Vec<String>,
+    peers: Vec<Peer>,
     cli_handler: ConnSet,
     peer_handler: ConnSet,
 }
@@ -105,7 +117,7 @@ impl TrafficCop {
     pub fn new(
         peer_port: u16,
         cli_port: u16,
-        peers: Vec<String>,
+        peer_addrs: Vec<String>,
         req_tx: Sender<Envelope>,
     ) -> io::Result<TrafficCop> {
 
@@ -120,6 +132,14 @@ impl TrafficCop {
         info!("binding to {} for peer connections", peer_addr);
         let peer_srv_sock =
             try!(TcpListener::bind(&peer_addr));
+
+        let mut peers = vec![];
+        for peer in peer_addrs {
+            peers.push(Peer {
+                addr: SocketAddr::from_str(&peer).unwrap(),
+                sock: None,
+            });
+        }
 
         Ok(TrafficCop {
             peers: peers,
@@ -243,6 +263,29 @@ impl Handler for TrafficCop {
         }
     }
 
+    // timeout is triggered periodically, attempting to repair
+    // connections to peers.
+    fn timeout(&mut self, event_loop: &mut EventLoop<TrafficCop>, timeout: ()) {
+        for peer in self.peers.iter_mut() {
+            if peer.sock.is_none() {
+                debug!("reestablishing connection with peer");
+                let (sock, _) = TcpSocket::v4().unwrap().connect(&peer.addr).unwrap();
+                self.peer_handler.register(sock, event_loop).map(|tok| {
+                    peer.sock = Some(tok);
+                });
+            }
+        }
+        debug!("have {:?} peer connections", self.peer_handler.conns.count());
+        // if leader is None, try to get promise leases, following-up with
+        // an abdication if we fail to get quorum after 2s (randomly picked).
+
+        // if leader is self, renew after 6s
+
+        //
+        let mut rng = thread_rng();
+        event_loop.timeout_ms((), rng.gen_range(200,500)).unwrap();
+    }
+
     fn notify(&mut self, event_loop: &mut EventLoop<TrafficCop>, mut msg: Envelope) {
         let sco = self.tok_to_sc(msg.tok);
         if sco.is_none() {
@@ -274,14 +317,11 @@ impl Handler for TrafficCop {
             sc.res_remaining += res.bytes().len();
             sc.res_buf = Some(res.flip());
         } else {
-            debug!("sc.res_buf is some :(");
-            // this shouldn't happen often, make a new one
-            // TODO(tyler) concat bufs
-            let mut rb = sc.res_buf.take().unwrap().flip();
-            rb.write_slice(b"<id> | <proto response>\n");
-            sc.res_buf = Some(rb.flip());
+            panic!("response already waiting on transmission.");
         }
+
         sc.interest.insert(EventSet::writable());
+
         event_loop.reregister(
             &sc.sock,
             msg.tok,
@@ -351,8 +391,8 @@ impl ServerConn {
                 return Err(e);
             },
         }
-        //T self.interest.remove(EventSet::writable());
 
+        // reset our response buf when we've sent everything
         self.res_buf = match res_buf.remaining() {
             0 => None,
             _ => Some(res_buf),
@@ -421,7 +461,17 @@ impl ConnSet {
         info!("ConnSet accepting socket");
 
         let sock = try!(self.srv_sock.accept());
-        let conn = ServerConn::new(sock.unwrap(), self.req_tx.clone());
+        for
+        self.register(sock.unwrap(), event_loop).map(|_| ())
+    }
+
+    fn register(
+        &mut self,
+        sock: TcpStream,
+        event_loop: &mut EventLoop<TrafficCop>,
+    ) -> io::Result<Token> {
+
+        let conn = ServerConn::new(sock, self.req_tx.clone());
 
         // Re-register accepting socket
         event_loop.reregister(
@@ -440,7 +490,7 @@ impl ConnSet {
                 EventSet::readable(),
                 PollOpt::edge() | PollOpt::oneshot()
             ).ok().expect("could not register socket with event loop");
-            ()
+            tok
         }).or_else(|e| Err(Error::new(ErrorKind::Other,
                                       "All connection slots full.")))
     }
