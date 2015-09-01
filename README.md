@@ -1,8 +1,8 @@
 # Rasputin DB :globe_with_meridians:
 
-No-Bullshit distributed transactional store.
+a distributed transactional store
 
-Triumvirs: Stability, performance, and composability.
+triumvirs: stability, performance, and composability
 
 key types:
 1. table: transactional namespaced KV backed by RocksDB
@@ -22,13 +22,10 @@ replication modes (per-collection):
 
 ## Roadmap
 - [x] mio event loops
-- [ ] consensus algorithm for distributed transactions
-- [ ] History Tree for allowing clients to receive a history of updates to an arbitrary subtree of the store.
-- [ ] rocksdb backed for persistence
-- [ ] atomic creation operations
-- [ ] ephemeral rnode bound to a leased client session
-- [ ] redirect clients to master for all operations (no stale reads allowed, faster writes over time)
+- [ ] leadership for meta group
+- [ ] meta table that contains information about collections and replicas
+- [ ] replica stream
+- [ ] high performance consensus algorithm
+- [ ] rocksdb persistence layer
 - [ ] mutable membership over consensus algorithm
-- [ ] lexicographic sharding of keyspace
-- [ ] zk api support
-- [ ] etcd api support
+- [ ] lexicographic resharding of keyspace
