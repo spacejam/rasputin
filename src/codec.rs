@@ -13,15 +13,16 @@ pub trait Codec<In: ?Sized, Out: ?Sized>
 
 /*
 impl <In: ?Sized, Mid: ?Sized, Out: ?Sized> Add<Codec<Mid, Out>> for Codec<In, Mid> {
-    type Output = Codec<In, Out>;
+    type Output = CodecStack<In, Mid, Out>;
 
-    fn add(self, right: Codec<Mid, Out>) -> Codec<In, Out> {
+    fn add(self, right: Codec<Mid, Out>) -> CodecStack<In, Mid, Out> {
         CodecStack {
             left: Box::new(self),
             right: Box::new(right),
         }
     }
 }
+*/
 
 pub struct CodecStack<In, Mid, Out> {
     left: Box<Codec<In, Mid>>,
@@ -30,14 +31,14 @@ pub struct CodecStack<In, Mid, Out> {
 
 impl <In, Mid, Out> Codec<In, Out> for CodecStack<In, Mid, Out> {
     fn decode(&mut self, buf: &mut In) -> Vec<Out> {
-        self.left.decode(buf).and_then(|mut d| self.right.decode(&mut d))
+        self.left.decode(buf).iter_mut().flat_map( |mut d|
+            self.right.decode(&mut d)).collect()
     }
 
     fn encode(&self, out: Out) -> In {
         self.left.encode(self.right.encode(out))
     }
 }
-*/
 
 pub struct Framed {
     sz_buf: MutByteBuf,
