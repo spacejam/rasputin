@@ -425,15 +425,12 @@ impl ServerConn {
             }
         };
 
-        match self.req_codec.decode(&mut req_buf.flip()) {
-            Some(req) => {
-                self.req_tx.send(Envelope {
-                    id: 5,
-                    tok: self.token.unwrap(),
-                    msg: req,
-                });
-            },
-            None => {},
+        for req in self.req_codec.decode(&mut req_buf.flip()) {
+            self.req_tx.send(Envelope {
+                id: 5,
+                tok: self.token.unwrap(),
+                msg: req,
+            });
         }
 
         event_loop.reregister(
@@ -461,7 +458,6 @@ impl ConnSet {
         info!("ConnSet accepting socket");
 
         let sock = try!(self.srv_sock.accept());
-        for
         self.register(sock.unwrap(), event_loop).map(|_| ())
     }
 

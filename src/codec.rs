@@ -5,34 +5,35 @@ use std::ops::Add;
 use bytes::{alloc, MutByteBuf, ByteBuf, Buf, MutBuf};
 use mio::{TryWrite, TryRead};
 
-pub trait Codec<In, Out> {
-    fn decode(&mut self, buf: &mut In) -> Option<Out>;
+pub trait Codec<In: ?Sized, Out: ?Sized>
+{
+    fn decode(&mut self, buf: &mut In) -> Vec<Out>;
     fn encode(&self, a: Out) -> In;
 }
 
 /*
-impl <InL, OutL, InR, OutR> Add<Codec<InR, OutR>> for Codec<InL, OutL> {
-    type Output = Codec<InL, OutR>;
+impl <In: ?Sized, Mid: ?Sized, Out: ?Sized> Add<Codec<Mid, Out>> for Codec<In, Mid> {
+    type Output = Codec<In, Out>;
 
-    fn add(self, right: Codec<InR, OutR>) -> Codec<InL, OutR> {
+    fn add(self, right: Codec<Mid, Out>) -> Codec<In, Out> {
         CodecStack {
-            left: self,
-            right: right,
+            left: Box::new(self),
+            right: Box::new(right),
         }
     }
 }
 
-pub struct CodecStack<'a, InL, OutL, InR, OutR> {
-    left: &'a Codec<InL, OutL>,
-    right: &'a Codec<InR, OutR>,
+pub struct CodecStack<In, Mid, Out> {
+    left: Box<Codec<In, Mid>>,
+    right: Box<Codec<Mid, Out>>,
 }
 
-impl <'a, InL, OutL, InR, OutR> Codec<InL, OutR> for CodecStack<'a, InL, OutL, InR, OutR> {
-    fn decode(&mut self, buf: &mut InR) -> Option<OutL> {
-        self.left.decode.map(|d| self.right.decode(d))
+impl <In, Mid, Out> Codec<In, Out> for CodecStack<In, Mid, Out> {
+    fn decode(&mut self, buf: &mut In) -> Vec<Out> {
+        self.left.decode(buf).and_then(|mut d| self.right.decode(&mut d))
     }
 
-    fn encode(&self, out: OutR) -> InL {
+    fn encode(&self, out: Out) -> In {
         self.left.encode(self.right.encode(out))
     }
 }
@@ -54,51 +55,56 @@ impl Framed {
 
 impl Codec<ByteBuf, ByteBuf> for Framed {
 
-    fn decode(&mut self, buf: &mut ByteBuf) -> Option<ByteBuf> {
-        // read size if we don't have a message yet
-        if self.msg.is_none() {
-            // TODO(tyler) incrementally build size, or this will explode
-            let sz_read = buf.try_read_buf(&mut self.sz_buf);
-            debug!("read {} bytes into the sz buffer", sz_read.unwrap().unwrap());
-            // if we've read 4 bytes for the size, create a msg
-            if self.sz_buf.remaining() != 0 {
-                return None;
+    fn decode(&mut self, buf: &mut ByteBuf) -> Vec<ByteBuf> {
+        let mut res = vec![];
+        loop {
+            // read size if we don't have a message yet
+            if self.msg.is_none() {
+                // TODO(tyler) incrementally build size, or this will explode
+                let sz_read = buf.try_read_buf(&mut self.sz_buf);
+                debug!("read {} bytes into the sz buffer", sz_read.unwrap().unwrap());
+                // if we've read 4 bytes for the size, create a msg
+                if self.sz_buf.remaining() != 0 {
+                    break;
+                }
+
+                let sz_buf = self.sz_buf.bytes();
+                let size = array_to_usize([sz_buf[0], sz_buf[1], sz_buf[2], sz_buf[3]]);
+                self.msg = unsafe {
+                    // manually create bytebuf so we can have exact cap and lim
+                    Some(ByteBuf::from_mem_ref(
+                        alloc::heap(size.next_power_of_two()),
+                        size as u32, // cap
+                        0,           // pos
+                        size as u32  // lim
+                    ).flip())
+                };
             }
 
-            let sz_buf = self.sz_buf.bytes();
-            let size = array_to_usize([sz_buf[0], sz_buf[1], sz_buf[2], sz_buf[3]]);
-            self.msg = unsafe {
-                Some(ByteBuf::from_mem_ref(
-                    alloc::heap(size.next_power_of_two()),
-                    size as u32, // cap
-                    0,           // pos
-                    size as u32  // lim
-                ).flip())
-            };
-        }
+            if self.msg.is_none() {
+                break;
+            }
 
-        if self.msg.is_none() {
-            return None;
-        }
+            let mut msg = self.msg.take().unwrap();
 
-        let mut msg = self.msg.take().unwrap();
-
-        // read actual message
-        match buf.try_read_buf(&mut msg) {
-            Ok(Some(read)) => {
-                // if we're done, return our Item
-                if msg.remaining() == 0 {
-                    // get ready to read a new size
-                    self.sz_buf.clear();
-                    // return the message
-                    Some(msg.flip())
-                } else {
-                    self.msg = Some(msg);
-                    None
-                }
-            },
-            _ => None,
+            // read actual message
+            match buf.try_read_buf(&mut msg) {
+                Ok(Some(read)) => {
+                    // if we're done, return our Item
+                    if msg.remaining() == 0 {
+                        // get ready to read a new size
+                        self.sz_buf.clear();
+                        // return the message
+                        res.push(msg.flip())
+                    } else {
+                        self.msg = Some(msg);
+                        break
+                    }
+                },
+                _ => break,
+            }
         }
+        res
     }
 
     fn encode(&self, item: ByteBuf) -> ByteBuf {
