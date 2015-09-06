@@ -284,7 +284,7 @@ impl Server {
     }
 
     fn cron(&mut self) {
-        info!("{} state: {:?}", self.id, self.state);
+        debug!("{} state: {:?}", self.id, self.state);
         // become candidate if we need to
         if !self.state.valid_leader() && !self.state.valid_candidate() {
             info!("transitioning to candidate state");
