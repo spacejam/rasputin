@@ -1,9 +1,11 @@
 use std::io::{Error, ErrorKind};
 use std::io;
 use std::net::SocketAddr;
-use std::str::FromStr;
+use std::ops::Add;
+use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Sender, Receiver};
 use std::thread;
+use std::usize;
 
 use bytes::{alloc, Buf, ByteBuf, MutByteBuf, SliceBuf};
 use mio;
@@ -11,30 +13,102 @@ use mio::{EventLoop, EventSet, PollOpt, Handler, Token, TryWrite, TryRead};
 use mio::tcp::{TcpListener, TcpStream, TcpSocket};
 use mio::util::Slab;
 use rand::{Rng, thread_rng};
+use protobuf;
+use protobuf::Message;
+use time;
 
-use ::{SrvReq, SrvRes, CliReq, CliRes};
+use ::{VoteReq, VoteRes, PeerMsg, CliReq, CliRes};
 use codec;
 use codec::Codec;
 
 const SERVER_CLIENTS: Token = Token(0);
 const SERVER_PEERS: Token = Token(1);
+const PEER_BROADCAST: Token = Token(usize::MAX);
+
+lazy_static! {
+    static ref LEADER_DURATION: time::Duration = time::Duration::seconds(12);
+    static ref LEADER_REFRESH: time::Duration = time::Duration::seconds(6);
+}
+
+enum State {
+    Leader {
+        until: time::Timespec,
+    },
+    Candidate {
+        until: time::Timespec,
+        have: Vec<Token>,
+        need: u8,
+    },
+    Follower {
+        tok: Token,
+        until: time::Timespec,
+    },
+    Init,
+}
+
+impl State {
+    fn valid_leader(&self) -> bool {
+        match *self {
+            State::Leader{until: until} =>
+                time::now().to_timespec() < until,
+            State::Follower{until: until, tok: _} =>
+                time::now().to_timespec() < until,
+            _ => false,
+        }
+    }
+
+    fn valid_candidate(&self) -> bool {
+        match *self {
+            State::Candidate{until: until, have:_, need:_} =>
+                time::now().to_timespec() < until,
+            _ => false,
+        }
+    }
+
+    fn is_leader(&self) -> bool {
+        match *self {
+            State::Leader{until:_} =>
+                true,
+            _ => false,
+        }
+    }
+
+    fn can_lead(&self) -> bool {
+        match *self {
+            State::Candidate{until:_, have: ref have, need: need} =>
+                have.len() > need as usize,
+            _ =>
+                false,
+        }
+    }
+
+    fn until(&self) -> Option<time::Timespec> {
+        match *self {
+            State::Leader{until: until} =>
+                Some(until),
+            State::Candidate{until: until, have: _, need: _} =>
+                Some(until),
+            State::Follower{until: until, tok: _} =>
+                Some(until),
+            _ => None,
+        }
+    }
+}
 
 pub struct Server {
     peer_port: u16,
     cli_port: u16,
+    id: u64,
     peers: Vec<String>,
+    res_tx: mio::Sender<Envelope>,
+    bcast_epoch: u64,
+    max_txid: u64,
+    state: State,
 }
 
 impl Server {
-    pub fn new(peer_port: u16, cli_port: u16, peers: Vec<String>) -> Server {
-        Server {
-            peer_port: peer_port,
-            cli_port: cli_port,
-            peers: peers,
-        }
-    }
 
-    pub fn run(self) {
+    pub fn run(peer_port: u16, cli_port: u16, peers: Vec<String>) {
         // All long-running worker threads get a clone of this
         // Sender.  When they exit, they send over it.  If the
         // Receiver ever completes a read, it means something
@@ -47,16 +121,18 @@ impl Server {
         // The TrafficCop manages our sockets, sends deserialized
         // messages over the request channel, and receives completed
         // responses over the response channel.
-        let (req_tx, req_rx) = mpsc::channel();
+        let (peer_req_tx, peer_req_rx) = mpsc::channel();
+        let (cli_req_tx, cli_req_rx) = mpsc::channel();
 
         let mut tc = TrafficCop::new(
-            self.peer_port,
-            self.cli_port,
-            self.peers,
-            req_tx,
+            peer_port,
+            cli_port,
+            peers.clone(),
+            peer_req_tx,
+            cli_req_tx,
         ).unwrap();
 
-        let mut event_loop: EventLoop<TrafficCop> = EventLoop::new().unwrap();
+        let mut event_loop = EventLoop::new().unwrap();
         let res_tx = event_loop.channel();
 
         // start server periodic tasks
@@ -70,14 +146,48 @@ impl Server {
             tex1.send(());
         });
 
-        // request handler thread
+        let server = Arc::new(Mutex::new(Server {
+            peer_port: peer_port,
+            cli_port: cli_port,
+            id: peer_port as u64 + cli_port as u64
+                + time::now().to_timespec().nsec as u64,
+            peers: peers,
+            res_tx: res_tx,
+            bcast_epoch: 0,
+            max_txid: 0, // TODO(tyler) read from rocksdb
+            state: State::Init,
+        }));
+
+        // peer request handler thread
+        let srv1 = server.clone();
         let tex2 = thread_exit_tx.clone();
         thread::spawn(move || {
-            for req_env in req_rx {
-                debug!("got request!");
-                res_tx.send(req_env);
+            for req in peer_req_rx {
+                srv1.lock().unwrap().handle_peer(req);
             }
             tex2.send(());
+        });
+
+        // cli request handler thread
+        let srv2 = server.clone();
+        let tex3 = thread_exit_tx.clone();
+        thread::spawn(move || {
+            for req in cli_req_rx {
+                srv2.lock().unwrap().handle_cli(req);
+            }
+            tex3.send(());
+        });
+
+        // cron thread
+        let srv3 = server.clone();
+        let tex4 = thread_exit_tx.clone();
+        thread::spawn(move || {
+            let mut rng = thread_rng();
+            loop {
+                thread::sleep_ms(rng.gen_range(400,500));
+                srv3.lock().unwrap().cron();
+            }
+            tex4.send(());
         });
 
         // this should never receive
@@ -86,13 +196,102 @@ impl Server {
         error!("{}", msg);
         panic!("A worker thread unexpectedly exited! Shutting down.");
     }
-}
 
-pub enum Message {
-    PeerReq(SrvReq),
-    PeerRes(SrvRes),
-    CliReq(CliReq),
-    CliRes(CliRes),
+    fn handle_peer(&mut self, env: Envelope) {
+        debug!("got peer message!");
+        let peer_msg: PeerMsg =
+            protobuf::parse_from_bytes(env.msg.bytes()).unwrap();
+        let mut res = PeerMsg::new();
+        res.set_srvid(self.id);
+        if peer_msg.has_vote_req() {
+            let vote_req = peer_msg.get_vote_req();
+            let mut vote_res = VoteRes::new();
+            vote_res.set_attempt(vote_req.get_attempt());
+            if self.state.valid_leader() {
+                info!("got bad vote req");
+                vote_res.set_success(false);
+                self.reply(env, ByteBuf::from_slice(
+                    &*res.write_to_bytes().unwrap().into_boxed_slice()    
+                ));
+            } else {
+                if self.state.valid_leader() {
+                    info!("got leader extension from {}", peer_msg.get_srvid());
+                } else {
+                    info!("submitting to leader {}", peer_msg.get_srvid());
+                }
+                self.state = State::Follower {
+                    tok: env.tok,
+                    until: time::now().to_timespec()
+                        .add(time::Duration::seconds(12)),
+                };
+                vote_res.set_success(true);
+                self.reply(env, ByteBuf::from_slice(
+                    &*res.write_to_bytes().unwrap().into_boxed_slice()    
+                ));
+            }
+        }
+    }
+
+    fn handle_cli(&mut self, req: Envelope) {
+        debug!("got cli request!");
+        // echo
+        let res = ByteBuf::from_slice(req.msg.bytes());
+        self.reply(req, res);
+    }
+
+    fn cron(&mut self) {
+        // start an election if we need to
+        if !self.state.valid_leader() && !self.state.valid_candidate() {
+            info!("transitioning to candidate state");
+            self.state = State::Candidate {
+                until: time::now().to_timespec().add(*LEADER_DURATION),
+                need: (self.peers.len() / 2 + 1) as u8,
+                have: vec![],
+            };
+            let mut req = PeerMsg::new();
+            req.set_srvid(self.id);
+            let mut vote_req = VoteReq::new();
+            vote_req.set_maxtxid(self.max_txid);
+            vote_req.set_attempt(0);
+            req.set_vote_req(vote_req);
+            self.peer_broadcast(
+                ByteBuf::from_slice(
+                    &*req.write_to_bytes().unwrap().into_boxed_slice()
+                )
+            );
+        }
+        // if we're the leader, refresh leadership every 6s
+        
+        // if we've started an election, transition if we can
+        // TODO(tyler) make sure we don't run into time inconsistencies
+        // due to results of valid_canididate being different here than
+        // above.
+        if self.state.valid_candidate() {
+            if self.state.can_lead() {
+                info!("transitioning to leader state");
+                self.state = State::Leader {
+                    until: self.state.until().unwrap(),
+                }
+            }
+        }
+    }
+
+    fn reply(&mut self, req: Envelope, res_buf: ByteBuf) {
+        self.res_tx.send(Envelope {
+            id: req.id,
+            tok: req.tok,
+            msg: res_buf,
+        });
+    }
+
+    fn peer_broadcast(&mut self, msg: ByteBuf) {
+        self.res_tx.send(Envelope {
+            id: self.bcast_epoch,
+            tok: PEER_BROADCAST,
+            msg: msg,
+        });
+        self.bcast_epoch += 1;
+    }
 }
 
 pub struct Envelope {
@@ -118,7 +317,8 @@ impl TrafficCop {
         peer_port: u16,
         cli_port: u16,
         peer_addrs: Vec<String>,
-        req_tx: Sender<Envelope>,
+        peer_req_tx: Sender<Envelope>,
+        cli_req_tx: Sender<Envelope>,
     ) -> io::Result<TrafficCop> {
 
         let cli_addr =
@@ -136,7 +336,7 @@ impl TrafficCop {
         let mut peers = vec![];
         for peer in peer_addrs {
             peers.push(Peer {
-                addr: SocketAddr::from_str(&peer).unwrap(),
+                addr: peer.parse().unwrap(),
                 sock: None,
             });
         }
@@ -147,13 +347,13 @@ impl TrafficCop {
                 srv_sock: cli_srv_sock,
                 srv_token: SERVER_CLIENTS,
                 conns: Slab::new_starting_at(Token(1024), 4096),
-                req_tx: req_tx.clone(),
+                req_tx: cli_req_tx,
             },
             peer_handler: ConnSet {
                 srv_sock: peer_srv_sock,
                 srv_token: SERVER_PEERS,
                 conns: Slab::new_starting_at(Token(2), 15),
-                req_tx: req_tx.clone(),
+                req_tx: peer_req_tx,
             },
         })
     }
@@ -179,8 +379,10 @@ impl TrafficCop {
 
         event_loop.run(self).unwrap();
 
-        Err(Error::new(ErrorKind::Other, "event_loop shouldn't have returned."))
-
+        Err(Error::new(
+                ErrorKind::Other,
+                "event_loop shouldn't have returned."
+        ))
     }
 
     fn tok_to_sc(&mut self, tok: Token) -> Option<&mut ServerConn> {
@@ -258,18 +460,21 @@ impl Handler for TrafficCop {
                     self.peer_handler.conn_writable(event_loop, peer),
                 cli if cli.as_usize() > 128 && cli.as_usize() <= 4096 =>
                     self.cli_handler.conn_writable(event_loop, cli),
-                t => panic!("received writable for out-of-range token: {}", t.as_usize()),
+                t => panic!("received writable for out-of-range token: {}",
+                            t.as_usize()),
             };
         }
     }
 
-    // timeout is triggered periodically, attempting to repair
-    // connections to peers.
+    // timeout is triggered periodically to (re)establish connections to peers.
     fn timeout(&mut self, event_loop: &mut EventLoop<TrafficCop>, timeout: ()) {
         for peer in self.peers.iter_mut() {
             if peer.sock.is_none() {
                 debug!("reestablishing connection with peer");
-                let (sock, _) = TcpSocket::v4().unwrap().connect(&peer.addr).unwrap();
+                let (sock, _) = TcpSocket::v4()
+                    .unwrap()
+                    .connect(&peer.addr)
+                    .unwrap();
                 self.peer_handler.register(sock, event_loop).map(|tok| {
                     peer.sock = Some(tok);
                 });
@@ -281,24 +486,32 @@ impl Handler for TrafficCop {
 
         // if leader is self, renew after 6s
 
-        //
         let mut rng = thread_rng();
         event_loop.timeout_ms((), rng.gen_range(200,500)).unwrap();
     }
 
-    fn notify(&mut self, event_loop: &mut EventLoop<TrafficCop>, mut msg: Envelope) {
-        let sco = self.tok_to_sc(msg.tok);
-        if sco.is_none() {
-            warn!("got notify for invalid token {}", msg.tok.as_usize());
-            return;
+    // notify is used to transmit messages
+    fn notify(
+        &mut self,
+        event_loop: &mut EventLoop<TrafficCop>,
+        mut msg: Envelope
+    ) {
+        let mut toks = vec![];
+        if msg.tok == PEER_BROADCAST {
+            for peer in self.peers.iter() {
+                peer.sock.map(|tok| toks.push(tok));
+            }
+        } else {
+            toks.push(msg.tok);
         }
-        let mut sc = sco.unwrap();
-        // TODO(tyler) serialize <id> | <proto> and write to sc.res_buf
-        let m = msg.msg.bytes();
-        debug!("msglen: {}", m.len());
-        debug!("bytes: {:?}", m);
-        if sc.res_buf.is_none() {
-            debug!("sc.res_buf is none");
+        for tok in toks {
+            let sco = self.tok_to_sc(tok);
+            if sco.is_none() {
+                warn!("got notify for invalid token {}", tok.as_usize());
+                continue;
+            }
+            let mut sc = sco.unwrap();
+            let m = msg.msg.bytes();
 
             let size = 4 + m.len();
             let mut res = unsafe {
@@ -312,29 +525,28 @@ impl Handler for TrafficCop {
 
             assert!(res.write_slice(&codec::usize_to_array(m.len())) == 4);
             assert!(res.write_slice(m) == m.len());
-            debug!("sc.res_buf: {:?}", res.bytes());
+
+            debug!("adding res to sc.res_bufs: {:?}", res.bytes());
 
             sc.res_remaining += res.bytes().len();
-            sc.res_buf = Some(res.flip());
-        } else {
-            panic!("response already waiting on transmission.");
+            sc.res_bufs.push(res.flip());
+
+            sc.interest.insert(EventSet::writable());
+
+            event_loop.reregister(
+                &sc.sock,
+                tok,
+                sc.interest,
+                PollOpt::edge() | PollOpt::oneshot(),
+            );
         }
-
-        sc.interest.insert(EventSet::writable());
-
-        event_loop.reregister(
-            &sc.sock,
-            msg.tok,
-            sc.interest,
-            PollOpt::edge() | PollOpt::oneshot(),
-        );
     }
 }
 
 struct ServerConn {
     sock: TcpStream,
     req_tx: Sender<Envelope>,
-    res_buf: Option<ByteBuf>,
+    res_bufs: Vec<ByteBuf>, // TODO(tyler) use proper dequeue
     res_remaining: usize,
     req_codec: codec::Framed,
     token: Option<Token>,
@@ -347,19 +559,22 @@ impl ServerConn {
             sock: sock,
             req_tx: req_tx,
             req_codec: codec::Framed::new(),
-            res_buf: None,
+            res_bufs: vec![],
             res_remaining: 0,
             token: None,
             interest: EventSet::hup()
         }
     }
 
-    fn writable(&mut self, event_loop: &mut EventLoop<TrafficCop>) -> io::Result<()> {
-        if self.res_buf.is_none() {
+    fn writable(
+        &mut self,
+        event_loop: &mut EventLoop<TrafficCop>
+    ) -> io::Result<()> {
+        if self.res_bufs.len() == 0 {
             // no responses yet, don't reregister
             return Ok(())
         }
-        let mut res_buf = self.res_buf.take().unwrap();
+        let mut res_buf = self.res_bufs.remove(0);
 
         debug!("res buf: {:?}", res_buf.bytes());
         match self.sock.try_write_buf(&mut res_buf) {
@@ -368,7 +583,7 @@ impl ServerConn {
                 self.interest.insert(EventSet::writable());
             }
             Ok(Some(r)) => {
-                info!("CONN : we wrote {} bytes!", r);
+                debug!("CONN : we wrote {} bytes!", r);
                 self.res_remaining -= r;
                 debug!("remaining: {}", self.res_remaining);
                 if self.res_remaining == 0 {
@@ -392,11 +607,10 @@ impl ServerConn {
             },
         }
 
-        // reset our response buf when we've sent everything
-        self.res_buf = match res_buf.remaining() {
-            0 => None,
-            _ => Some(res_buf),
-        };
+        // push res back if it's not finished
+        if res_buf.remaining() != 0 {
+            self.res_bufs.insert(0, res_buf);
+        }
 
         event_loop.reregister(
             &self.sock,
@@ -406,9 +620,13 @@ impl ServerConn {
         )
     }
 
-    fn readable(&mut self, event_loop: &mut EventLoop<TrafficCop>) -> io::Result<()> {
+    fn readable(
+        &mut self,
+        event_loop: &mut EventLoop<TrafficCop>
+    ) -> io::Result<()> {
 
-        // TODO(tyler) get rid of this double copying and read directly to codec
+        // TODO(tyler) get rid of this double copying and read
+        // directly to codec
         let mut req_buf = ByteBuf::mut_with_capacity(1024);
 
         match self.sock.try_read_buf(&mut req_buf) {
@@ -416,7 +634,7 @@ impl ServerConn {
                 panic!("got readable, but can't read from the socket");
             }
             Ok(Some(r)) => {
-                info!("CONN : we read {} bytes!", r);
+                debug!("CONN : we read {} bytes!", r);
                 //T self.interest.remove(EventSet::readable());
             }
             Err(e) => {
@@ -497,7 +715,7 @@ impl ConnSet {
         tok: Token,
     ) -> io::Result<()> {
 
-        info!("ConnSet conn readable; tok={:?}", tok);
+        debug!("ConnSet conn readable; tok={:?}", tok);
         if !self.conns.contains(tok) {
             error!("got conn_readable for non-existent token!");
             return Ok(());
@@ -516,11 +734,10 @@ impl ConnSet {
             return Ok(());
         }
 
-        info!("ConnSet conn writable; tok={:?}", tok);
+        debug!("ConnSet conn writable; tok={:?}", tok);
         match self.conn(tok).writable(event_loop) {
             Err(e) => {
                 debug!("got err in ConnSet conn_writable: {}", e);
-                // now being done in server top level // self.conns.remove(tok);
                 Err(e)
             },
             w => w,

@@ -123,18 +123,14 @@ message BatchRes {
 }
 
 // server<->server top-level api
-message SrvReq {
+message PeerMsg {
   required uint64 srvid = 1;
-  optional VoteReq voteReq = 2;
-  optional BatchReq batchReq = 3;
-  optional Learn learn = 4;
-  optional Propose propose = 5;
-}
-
-message SrvRes {
-  required uint64 srvid = 1;
-  optional VoteRes voteRes = 2;
-  optional BatchRes batchRes = 3;
-  optional Accept accept = 4;
-  optional Reject reject = 5;
+  optional VoteReq vote_req = 2;
+  optional VoteRes vote_res = 3;
+  optional BatchReq batch_req = 4;
+  optional BatchRes batch_res = 5;
+  optional Propose propose = 6;
+  optional Accept accept = 7;
+  optional Reject reject = 8;
+  optional Learn learn = 9;
 }

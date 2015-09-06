@@ -19,6 +19,7 @@ rustc-serialize = "0.3.15"
 mio = "0.4.2"
 bytes = "0.2.11"
 rand = "0.3"
+lazy_static="0.1.14"
 
 [dependencies.protobuf]
 git = "https://github.com/stepancheg/rust-protobuf.git"

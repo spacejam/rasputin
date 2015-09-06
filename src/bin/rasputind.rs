@@ -35,7 +35,7 @@ fn main() {
         .and_then(|d| d.decode())
         .unwrap_or_else(|e| e.exit());
 
-    rasputin::logging::init_logger(args.flag_logfile, LogLevel::Debug).unwrap();
+    rasputin::logging::init_logger(args.flag_logfile, LogLevel::Info).unwrap();
     print_banner();
 
     let peer_port: u16 = match args.flag_peer_port {
@@ -54,7 +54,7 @@ fn main() {
         .filter(|s| s != "")
         .collect();
 
-    Server::new(peer_port, cli_port, peers).run();
+    Server::run(peer_port, cli_port, peers);
 }
 
 #[derive(Debug, RustcDecodable)]

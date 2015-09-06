@@ -11,7 +11,7 @@ pub use serialization::{
     VoteReq, VoteRes,
     BatchReq, BatchRes,
     Append, Learn, Propose, Accept, Reject,
-    SrvReq, SrvRes,
+    PeerMsg,
 };
 
 pub use codec::{
@@ -28,5 +28,6 @@ extern crate protobuf;
 extern crate bytes;
 extern crate mio;
 #[macro_use] extern crate log;
+#[macro_use] extern crate lazy_static;
 extern crate time;
 extern crate rand;

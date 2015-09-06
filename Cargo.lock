@@ -4,6 +4,7 @@ version = "0.0.1"
 dependencies = [
  "bytes 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "docopt 0.6.68 (registry+https://github.com/rust-lang/crates.io-index)",
+ "lazy_static 0.1.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 1.0.1 (git+https://github.com/stepancheg/rust-protobuf.git)",
@@ -66,6 +67,11 @@ dependencies = [
  "winapi 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "winapi-build 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
+[[package]]
+name = "lazy_static"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "libc"
