@@ -8,7 +8,7 @@ pub use serialization::{
     CASReq, CASRes,
     WatchReq, WatchRes,
     CliReq, CliRes,
-    VoteReq, VoteRes,
+    VoteReq, VoteExtend, VoteRes,
     BatchReq, BatchRes,
     Append, Learn, Propose, Accept, Reject,
     PeerMsg,

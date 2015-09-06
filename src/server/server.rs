@@ -1,7 +1,7 @@
 use std::io::{Error, ErrorKind};
 use std::io;
 use std::net::SocketAddr;
-use std::ops::Add;
+use std::ops::{Add, Sub};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Sender, Receiver};
 use std::thread;
@@ -17,7 +17,7 @@ use protobuf;
 use protobuf::Message;
 use time;
 
-use ::{VoteReq, VoteRes, PeerMsg, CliReq, CliRes};
+use ::{VoteReq, VoteExtend, VoteRes, PeerMsg, CliReq, CliRes};
 use codec;
 use codec::Codec;
 
@@ -32,14 +32,20 @@ lazy_static! {
 
 enum State {
     Leader {
+        attempt: u64,
+        have: Vec<Token>,
+        need: u8,
         until: time::Timespec,
     },
     Candidate {
-        until: time::Timespec,
+        attempt: u64,
         have: Vec<Token>,
         need: u8,
+        until: time::Timespec,
     },
     Follower {
+        attempt: u64,
+        id: u64,
         tok: Token,
         until: time::Timespec,
     },
@@ -49,9 +55,9 @@ enum State {
 impl State {
     fn valid_leader(&self) -> bool {
         match *self {
-            State::Leader{until: until} =>
+            State::Leader{attempt:_, have:_, need:_, until: until} =>
                 time::now().to_timespec() < until,
-            State::Follower{until: until, tok: _} =>
+            State::Follower{attempt:_, id:_, until: until, tok: _} =>
                 time::now().to_timespec() < until,
             _ => false,
         }
@@ -59,7 +65,7 @@ impl State {
 
     fn valid_candidate(&self) -> bool {
         match *self {
-            State::Candidate{until: until, have:_, need:_} =>
+            State::Candidate{attempt:_, until: until, have:_, need:_} =>
                 time::now().to_timespec() < until,
             _ => false,
         }
@@ -67,29 +73,68 @@ impl State {
 
     fn is_leader(&self) -> bool {
         match *self {
-            State::Leader{until:_} =>
+            State::Leader{attempt:_, have:_, need:_, until:_} =>
                 true,
             _ => false,
         }
     }
 
-    fn can_lead(&self) -> bool {
+    fn is_candidate(&self) -> bool {
         match *self {
-            State::Candidate{until:_, have: ref have, need: need} =>
+            State::Candidate{attempt:_, have:_, need:_, until:_} =>
+                true,
+            _ => false,
+        }
+    }
+
+    fn should_extend_leadership(&self) -> bool {
+        match *self {
+            State::Leader{attempt:_, have:_, need:_, until: until} =>
+                time::now().to_timespec() >
+                until.sub(*LEADER_DURATION).add(*LEADER_REFRESH),
+            _ => false,
+        }
+    }
+
+    fn can_extend_lead(&self) -> bool {
+        match *self {
+            State::Candidate{attempt:_, until:_, have: ref have, need: need} =>
+                have.len() > need as usize,
+            State::Leader{attempt:_, have: ref have, need: need, until:_} =>
                 have.len() > need as usize,
             _ =>
                 false,
         }
     }
 
+    fn following(&self, id: u64) -> bool {
+        match *self {
+            State::Follower{attempt:_, id: fid, until: until, tok: _} =>
+                id == fid,
+            _ => false,
+        }
+    }
+
     fn until(&self) -> Option<time::Timespec> {
         match *self {
-            State::Leader{until: until} =>
+            State::Leader{attempt:_, have:_, need:_, until: until} =>
                 Some(until),
-            State::Candidate{until: until, have: _, need: _} =>
+            State::Candidate{attempt:_, until: until, have: _, need: _} =>
                 Some(until),
-            State::Follower{until: until, tok: _} =>
+            State::Follower{attempt:_, id:_, until: until, tok: _} =>
                 Some(until),
+            _ => None,
+        }
+    }
+
+    fn attempt(&self) -> Option<u64> {
+        match *self {
+            State::Leader{attempt: attempt, have:_, need:_, until: _} =>
+                Some(attempt),
+            State::Candidate{attempt: attempt, until:_, have: _, need: _} =>
+                Some(attempt),
+            State::Follower{attempt: attempt, id:_, until: _, tok: _} =>
+                Some(attempt),
             _ => None,
         }
     }
@@ -203,32 +248,153 @@ impl Server {
             protobuf::parse_from_bytes(env.msg.bytes()).unwrap();
         let mut res = PeerMsg::new();
         res.set_srvid(self.id);
-        if peer_msg.has_vote_req() {
+
+        // handle vote extend
+        if peer_msg.has_vote_extend() {
+            info!("got vote extension request");
+            let mut vote_res = VoteRes::new();
+            vote_res.set_attempt(peer_msg.get_vote_extend().get_attempt());
+
+            // only extend if we following a leader with this id
+            if self.state.following(peer_msg.get_srvid()) {
+                vote_res.set_success(true);
+                info!("extending followership");
+                self.state = match self.state {
+                    State::Follower{
+                        attempt: attempt,
+                        id: id,
+                        until: _,
+                        tok: tok,
+                    } => Some(State::Follower {
+                        attempt: attempt,
+                        id: id,
+                        until: time::now().to_timespec().add(*LEADER_DURATION),
+                        tok: tok,
+                    }),
+                    _ => None,
+                }.unwrap();
+            } else {
+                info!("ignoring extend request");
+                vote_res.set_success(false);
+            }
+            res.set_vote_res(vote_res);
+            self.reply(env, ByteBuf::from_slice(
+                &*res.write_to_bytes().unwrap().into_boxed_slice()
+            ));
+            return;
+        // handle vote response
+        } else if peer_msg.has_vote_res() {
+            debug!("got response for vote request");
+            let vote_res = peer_msg.get_vote_res();
+
+            let attempt = self.state.attempt();
+            if attempt.is_none() ||
+                vote_res.get_attempt() != attempt.unwrap() ||
+                vote_res.get_success() == false {
+
+                return
+            }
+
+            if self.state.valid_candidate() {
+
+                self.state = match self.state {
+                    State::Candidate{
+                        attempt: attempt,
+                        until: until,
+                        need: need,
+                        have: ref have
+                    } => {
+                        let mut new_until = until;
+                        let mut new_have = have.clone();
+                        if !new_have.contains(&env.tok) {
+                            new_have.push(env.tok);
+                        }
+                        if new_have.len() > need as usize {
+                            info!("transitioning to leader state");
+                            new_have = vec![];
+                            new_until = until.add(*LEADER_REFRESH);
+                            Some(State::Leader{
+                                attempt: attempt,
+                                until: new_until,
+                                need: need,
+                                have: new_have,
+                            })
+                        } else {
+                            Some(State::Candidate{
+                                attempt: attempt,
+                                until: new_until,
+                                need: need,
+                                have: new_have,
+                            })
+                        }
+                    },
+                    _ => None,
+                }.unwrap();
+
+            } else if self.state.is_leader() &&
+                self.state.valid_leader() {
+
+                self.state = match self.state {
+                    State::Leader{
+                        attempt: attempt,
+                        until: until,
+                        need: need,
+                        have: ref have
+                    } => {
+                        let mut new_until = until;
+                        let mut new_have = have.clone();
+                        if !new_have.contains(&env.tok) {
+                            new_have.push(env.tok);
+                        }
+                        if new_have.len() > need as usize {
+                            new_have = vec![];
+                            new_until = until.add(*LEADER_REFRESH);
+                        }
+                        Some(State::Leader{
+                            attempt: attempt,
+                            until: new_until,
+                            need: need,
+                            have: new_have,
+                        })
+                    },
+                    _ => None,
+                }.unwrap()
+            } else {
+                error!("got vote response, but we can't handle it");
+                info!("valid leader: {}", self.state.valid_leader());
+                info!("is leader: {}", self.state.is_leader());
+                info!("valid candidate: {}", self.state.valid_candidate());
+                info!("is candidate: {}", self.state.is_candidate());
+                info!("res attempt: {}", vote_res.get_attempt());
+                info!("our attempt: {}", self.state.attempt().unwrap());
+            }
+                
+        // handle vote request
+        } else if peer_msg.has_vote_req() {
             let vote_req = peer_msg.get_vote_req();
             let mut vote_res = VoteRes::new();
             vote_res.set_attempt(vote_req.get_attempt());
             if self.state.valid_leader() {
-                info!("got bad vote req");
+                info!("got unwanted vote req from {}", peer_msg.get_srvid());
                 vote_res.set_success(false);
-                self.reply(env, ByteBuf::from_slice(
-                    &*res.write_to_bytes().unwrap().into_boxed_slice()    
-                ));
+            } else if peer_msg.get_srvid() == self.id {
+                // reply to self but don't change to follower
+                vote_res.set_success(true);
             } else {
-                if self.state.valid_leader() {
-                    info!("got leader extension from {}", peer_msg.get_srvid());
-                } else {
-                    info!("submitting to leader {}", peer_msg.get_srvid());
-                }
+                info!("submitting to leader {}", peer_msg.get_srvid());
                 self.state = State::Follower {
+                    id: peer_msg.get_srvid(),
+                    attempt: vote_req.get_attempt(),
                     tok: env.tok,
                     until: time::now().to_timespec()
                         .add(time::Duration::seconds(12)),
                 };
                 vote_res.set_success(true);
-                self.reply(env, ByteBuf::from_slice(
-                    &*res.write_to_bytes().unwrap().into_boxed_slice()    
-                ));
             }
+            res.set_vote_res(vote_res);
+            self.reply(env, ByteBuf::from_slice(
+                &*res.write_to_bytes().unwrap().into_boxed_slice()
+            ));
         }
     }
 
@@ -244,6 +410,7 @@ impl Server {
         if !self.state.valid_leader() && !self.state.valid_candidate() {
             info!("transitioning to candidate state");
             self.state = State::Candidate {
+                attempt: self.bcast_epoch,
                 until: time::now().to_timespec().add(*LEADER_DURATION),
                 need: (self.peers.len() / 2 + 1) as u8,
                 have: vec![],
@@ -252,7 +419,7 @@ impl Server {
             req.set_srvid(self.id);
             let mut vote_req = VoteReq::new();
             vote_req.set_maxtxid(self.max_txid);
-            vote_req.set_attempt(0);
+            vote_req.set_attempt(self.bcast_epoch);
             req.set_vote_req(vote_req);
             self.peer_broadcast(
                 ByteBuf::from_slice(
@@ -260,18 +427,21 @@ impl Server {
                 )
             );
         }
+
         // if we're the leader, refresh leadership every 6s
-        
-        // if we've started an election, transition if we can
-        // TODO(tyler) make sure we don't run into time inconsistencies
-        // due to results of valid_canididate being different here than
-        // above.
-        if self.state.valid_candidate() {
-            if self.state.can_lead() {
-                info!("transitioning to leader state");
-                self.state = State::Leader {
-                    until: self.state.until().unwrap(),
-                }
+        if self.state.is_leader() {
+            if self.state.should_extend_leadership() {
+                info!("extending leadership");
+                let mut req = PeerMsg::new();
+                req.set_srvid(self.id);
+                let mut vote_req = VoteExtend::new();
+                vote_req.set_attempt(self.state.attempt().unwrap());
+                req.set_vote_extend(vote_req);
+                self.peer_broadcast(
+                    ByteBuf::from_slice(
+                        &*req.write_to_bytes().unwrap().into_boxed_slice()
+                    )
+                );
             }
         }
     }
