@@ -334,4 +334,3 @@ impl Server {
         self.bcast_epoch += 1;
     }
 }
-

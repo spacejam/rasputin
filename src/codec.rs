@@ -11,19 +11,6 @@ pub trait Codec<In: ?Sized, Out: ?Sized>
     fn encode(&self, a: Out) -> In;
 }
 
-/*
-impl <In: ?Sized, Mid: ?Sized, Out: ?Sized> Add<Codec<Mid, Out>> for Codec<In, Mid> {
-    type Output = CodecStack<In, Mid, Out>;
-
-    fn add(self, right: Codec<Mid, Out>) -> CodecStack<In, Mid, Out> {
-        CodecStack {
-            left: Box::new(self),
-            right: Box::new(right),
-        }
-    }
-}
-*/
-
 pub struct CodecStack<In, Mid, Out> {
     left: Box<Codec<In, Mid>>,
     right: Box<Codec<Mid, Out>>,
