@@ -107,9 +107,6 @@ message VoteReq {
   required uint64 maxtxid = 1;
   required uint64 attempt = 2;
 }
-message VoteExtend {
-  required uint64 attempt = 1;
-}
 message VoteRes {
   required bool success = 1;
   required uint64 attempt = 2;
@@ -130,7 +127,6 @@ message PeerMsg {
   required uint64 srvid = 1;
   optional VoteReq vote_req = 2;
   optional VoteRes vote_res = 3;
-  optional VoteExtend vote_extend = 4;
   optional BatchReq batch_req = 5;
   optional BatchRes batch_res = 6;
   optional Propose propose = 7;
