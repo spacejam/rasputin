@@ -17,7 +17,7 @@ use protobuf;
 use protobuf::Message;
 use time;
 
-use ::{CliReq, CliRes, PeerMsg, RedirectRes, VoteReq, VoteRes};
+use ::{CliReq, CliRes, GetRes, PeerMsg, RedirectRes, VoteReq, VoteRes};
 use server::{Envelope, State, LEADER_REFRESH, LEADER_DURATION, PEER_BROADCAST};
 use server::traffic_cop::TrafficCop;
 
@@ -293,6 +293,8 @@ impl Server {
             protobuf::parse_from_bytes(req.msg.bytes()).unwrap();
         let mut res = CliRes::new();
         if !self.state.is_leader() {
+            // If we aren't the leader, we must return some sort of a RedirectRes instead
+            // of a response.
             let mut redirect_res = RedirectRes::new();
             redirect_res.set_msgid(req.id);
             // If we're a follower, a leader has been elected, so sets the return address.
@@ -307,9 +309,19 @@ impl Server {
                     } => Some(leader_addr),
                     _ => None,
                 }.unwrap();
+                redirect_res.set_success(true);
                 redirect_res.set_address(format!("{:?}", leader_address));
+            } else {
+                redirect_res.set_success(false);
+                redirect_res.set_err("No leader has been elected yet".to_string());
             }
             res.set_redirect(redirect_res);
+        } else if cli_req.has_get() {
+            let mut get_res = GetRes::new();
+            get_res.set_success(true);
+            get_res.set_txid(1337);
+            get_res.set_value(vec![]);
+            res.set_get(get_res);
         }
 
         self.reply(req, ByteBuf::from_slice(

@@ -60,8 +60,10 @@ message WatchRes {
 }
 
 message RedirectRes {
-  required uint64 msgid = 1;
-  optional string address = 2;
+  required bool success = 1;
+  required uint64 msgid = 2;
+  optional string address = 3;
+  optional string err = 4;
 }
 
 // client top-levl API
