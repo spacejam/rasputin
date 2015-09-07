@@ -48,7 +48,6 @@ impl Codec<ByteBuf, ByteBuf> for Framed {
         loop {
             // read size if we don't have a message yet
             if self.msg.is_none() {
-                // TODO(tyler) incrementally build size, or this will explode
                 let sz_read = buf.try_read_buf(&mut self.sz_buf);
                 debug!("read {} bytes into the sz buffer", sz_read.unwrap().unwrap());
                 // if we've read 4 bytes for the size, create a msg
