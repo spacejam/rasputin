@@ -111,11 +111,7 @@ impl State {
         match *self {
             State::Leader{attempt:_, have:_, need:_, until: until} => {
                 let now = time::now().to_timespec();
-                let r =
-                    now.add(*LEADER_REFRESH) >= until &&
-                    now < until;
-                info!("should_extend_leadership: {}", r);
-                r
+                now.add(*LEADER_REFRESH) >= until && now < until
             },
             _ => false,
         }
