@@ -112,7 +112,7 @@ impl State {
             State::Leader{attempt:_, have:_, need:_, until: until} => {
                 let now = time::now().to_timespec();
                 let r =
-                    now >= until.sub(*LEADER_DURATION) &&
+                    now.add(*LEADER_REFRESH) >= until &&
                     now < until;
                 info!("should_extend_leadership: {}", r);
                 r

@@ -142,7 +142,7 @@ impl Server {
                 return
             }
 
-            if !vote_res.get_success() {
+            if self.state.valid_candidate() && !vote_res.get_success() {
                 // reset if we get any nacks
                 self.state = State::Init;
             } else if self.state.valid_candidate() {
@@ -155,7 +155,6 @@ impl Server {
                         need: need,
                         have: ref have,
                     } => {
-                        let mut new_until = until;
                         let mut new_have = have.clone();
                         if !new_have.contains(&env.tok) {
                             new_have.push(env.tok);
@@ -164,10 +163,9 @@ impl Server {
                             // we've ascended to leader!
                             info!("{} transitioning to leader state", self.id);
                             new_have = vec![];
-                            new_until = until.add(*LEADER_REFRESH);
                             Some(State::Leader{
                                 attempt: attempt,
-                                until: new_until,
+                                until: until,
                                 need: need,
                                 have: new_have,
                             })
@@ -175,7 +173,7 @@ impl Server {
                             // we still need more votes
                             Some(State::Candidate{
                                 attempt: attempt,
-                                until: new_until,
+                                until: until,
                                 need: need,
                                 have: new_have,
                             })
@@ -186,7 +184,8 @@ impl Server {
 
             // see if we have a majority of peers, required for extension
             } else if self.state.is_leader() &&
-                self.state.valid_leader() {
+                self.state.valid_leader() &&
+                vote_res.get_success() {
 
                 self.state = match self.state {
                     State::Leader{
@@ -203,7 +202,9 @@ impl Server {
                         if new_have.len() >= need as usize {
                             info!("{} leadership extended", self.id);
                             new_have = vec![];
-                            new_until = until.add(*LEADER_REFRESH);
+                            new_until = time::now()
+                                .to_timespec()
+                                .add(*LEADER_DURATION);
                         }
                         Some(State::Leader{
                             attempt: attempt,
@@ -214,6 +215,8 @@ impl Server {
                     },
                     _ => None,
                 }.unwrap()
+            } else if !vote_res.get_success() {
+                warn!("{} received vote nack from {}", self.id, peer_id);
             } else {
                 // this can happen if a vote res is received by a follower
                 error!("got vote response, but we can't handle it");
@@ -267,8 +270,7 @@ impl Server {
                     id: peer_id,
                     attempt: vote_req.get_attempt(),
                     tok: env.tok,
-                    until: time::now().to_timespec()
-                        .add(time::Duration::seconds(12)),
+                    until: time::now().to_timespec().add(*LEADER_DURATION),
                 };
                 vote_res.set_success(true);
             // reject if we have a higher max txid
