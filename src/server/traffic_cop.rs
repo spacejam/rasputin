@@ -143,14 +143,14 @@ impl Handler for TrafficCop {
         if events.is_readable() {
             match token {
                 SERVER_PEERS => {
-                    info!("got SERVER_PEERS accept");
+                    debug!("got SERVER_PEERS accept");
                     self.peer_handler.accept(event_loop).or_else( |e| {
                         error!("failed to accept peer: all slots full");
                         Err(e)
                     });
                 },
                 SERVER_CLIENTS => {
-                    info!("got SERVER_CLIENTS accept");
+                    debug!("got SERVER_CLIENTS accept");
                     self.cli_handler.accept(event_loop).or_else( |e| {
                         error!("failed to accept client: all slots full");
                         Err(e)

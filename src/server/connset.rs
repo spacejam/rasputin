@@ -36,7 +36,7 @@ impl ConnSet {
         event_loop: &mut EventLoop<TrafficCop>,
     ) -> io::Result<()> {
 
-        info!("ConnSet accepting socket");
+        debug!("ConnSet accepting socket");
 
         let sock = try!(self.srv_sock.accept());
         self.register(sock.unwrap(), event_loop).map(|_| ())
