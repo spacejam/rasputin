@@ -80,7 +80,7 @@ impl ConnSet {
 
         debug!("ConnSet conn readable; tok={:?}", tok);
         if !self.conns.contains(tok) {
-            error!("got conn_readable for non-existent token!");
+            debug!("got conn_readable for non-existent token!");
             return Ok(());
         }
 
@@ -93,7 +93,7 @@ impl ConnSet {
         tok: Token,
     ) -> io::Result<()> {
         if !self.conns.contains(tok) {
-            error!("got conn_writable for non-existent token!");
+            debug!("got conn_writable for non-existent token!");
             return Ok(());
         }
 
@@ -111,4 +111,3 @@ impl ConnSet {
         &mut self.conns[tok]
     }
 }
-

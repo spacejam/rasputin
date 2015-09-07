@@ -129,6 +129,12 @@ impl Handler for TrafficCop {
                 peer if peer.as_usize() >= 2 && peer.as_usize() <= 16 => {
                     if self.peer_handler.conns.contains(token) {
                          self.peer_handler.conns.remove(token);
+                         for peer in self.peers.iter_mut() {
+                            if peer.sock == Some(token) {
+                                debug!("dropping disconnected peer socket");
+                                peer.sock = None;
+                            }
+                         }
                     }
                 },
                 cli if cli.as_usize() >= 1024 && cli.as_usize() <= 4096 => {
