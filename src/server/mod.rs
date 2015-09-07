@@ -40,6 +40,7 @@ lazy_static! {
 
 pub struct Envelope {
     id: u64,
+    address: Option<SocketAddr>,
     tok: Token,
     msg: ByteBuf,
 }
@@ -67,6 +68,7 @@ enum State {
         attempt: u64,
         id: u64,
         tok: Token,
+        leader_addr: SocketAddr,
         until: time::Timespec,
     },
     Init,
@@ -77,7 +79,7 @@ impl State {
         match *self {
             State::Leader{attempt:_, have:_, need:_, until: until} =>
                 time::now().to_timespec() < until,
-            State::Follower{attempt:_, id:_, until: until, tok: _} =>
+            State::Follower{attempt:_, id:_, leader_addr: _, until: until, tok: _} =>
                 time::now().to_timespec() < until,
             _ => false,
         }
@@ -94,6 +96,14 @@ impl State {
     fn is_leader(&self) -> bool {
         match *self {
             State::Leader{attempt:_, have:_, need:_, until:_} =>
+                true,
+            _ => false,
+        }
+    }
+
+    fn is_follower(&self) -> bool {
+        match *self {
+            State::Follower{attempt:_, id:_, leader_addr: _, until: _, tok: _} =>
                 true,
             _ => false,
         }
@@ -130,7 +140,7 @@ impl State {
 
     fn following(&self, id: u64) -> bool {
         match *self {
-            State::Follower{attempt:_, id: fid, until: until, tok: _} =>
+            State::Follower{attempt:_, id: fid, leader_addr: _, until: until, tok: _} =>
                 id == fid,
             _ => false,
         }
@@ -142,7 +152,7 @@ impl State {
                 Some(until),
             State::Candidate{attempt:_, until: until, have: _, need: _} =>
                 Some(until),
-            State::Follower{attempt:_, id:_, until: until, tok: _} =>
+            State::Follower{attempt:_, id:_, leader_addr: _, until: until, tok: _} =>
                 Some(until),
             _ => None,
         }
@@ -154,7 +164,7 @@ impl State {
                 Some(attempt),
             State::Candidate{attempt: attempt, until:_, have: _, need: _} =>
                 Some(attempt),
-            State::Follower{attempt: attempt, id:_, until: _, tok: _} =>
+            State::Follower{attempt: attempt, id:_, leader_addr: _, until: _, tok: _} =>
                 Some(attempt),
             _ => None,
         }
