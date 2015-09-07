@@ -109,9 +109,14 @@ impl State {
 
     fn should_extend_leadership(&self) -> bool {
         match *self {
-            State::Leader{attempt:_, have:_, need:_, until: until} =>
-                time::now().to_timespec() >
-                until.sub(*LEADER_DURATION).add(*LEADER_REFRESH),
+            State::Leader{attempt:_, have:_, need:_, until: until} => {
+                let now = time::now().to_timespec();
+                let r =
+                    now >= until.sub(*LEADER_DURATION) &&
+                    now < until;
+                info!("should_extend_leadership: {}", r);
+                r
+            },
             _ => false,
         }
     }
