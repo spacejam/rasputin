@@ -200,7 +200,7 @@ impl Server {
                             new_have.push(env.tok);
                         }
                         if new_have.len() >= need as usize {
-                            info!("{} leadership extended", self.id);
+                            debug!("{} leadership extended", self.id);
                             new_have = vec![];
                             new_until = time::now()
                                 .to_timespec()
@@ -243,11 +243,11 @@ impl Server {
             } else if self.state.valid_leader() &&
                 !self.state.following(peer_id) {
 
-                info!("got unwanted vote req from {}", peer_id);
+                warn!("got unwanted vote req from {}", peer_id);
                 vote_res.set_success(false);
             // if we're already following this node, keed doing so
             } else if self.state.following(peer_id) {
-                info!("{} extending followership of {}", self.id, peer_id);
+                debug!("{} extending followership of {}", self.id, peer_id);
                 self.state = match self.state {
                     State::Follower{
                         attempt: attempt,
@@ -265,7 +265,7 @@ impl Server {
                 vote_res.set_success(true);
             // accept this node as the leader if it has a txid >= ours
             } else if vote_req.get_maxtxid() >= self.max_txid {
-                info!("submitting to leader {}", peer_id);
+                info!("new leader {}", peer_id);
                 self.state = State::Follower {
                     id: peer_id,
                     attempt: vote_req.get_attempt(),
@@ -292,7 +292,7 @@ impl Server {
     }
 
     fn cron(&mut self) {
-        info!("{} state: {:?}", self.id, self.state);
+        debug!("{} state: {:?}", self.id, self.state);
         // become candidate if we need to
         if !self.state.valid_leader() && !self.state.valid_candidate() {
             info!("{} transitioning to candidate state", self.id);
@@ -308,7 +308,7 @@ impl Server {
         if self.state.should_extend_leadership() ||
             self.state.valid_candidate() {
 
-            info!("broadcasting VoteReq");
+            debug!("broadcasting VoteReq");
             let mut req = PeerMsg::new();
             req.set_srvid(self.id);
             let mut vote_req = VoteReq::new();
