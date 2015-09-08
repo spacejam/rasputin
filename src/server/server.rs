@@ -13,11 +13,12 @@ use mio::{EventLoop, EventSet, PollOpt, Handler, Token, TryWrite, TryRead};
 use mio::tcp::{TcpListener, TcpStream, TcpSocket};
 use mio::util::Slab;
 use rand::{Rng, thread_rng};
+use rocksdb::{DB, Writable};
 use protobuf;
 use protobuf::Message;
 use time;
 
-use ::{CliReq, CliRes, GetRes, PeerMsg, RedirectRes, VoteReq, VoteRes};
+use ::{CliReq, CliRes, GetReq, GetRes, PeerMsg, RedirectRes, SetReq, SetRes, VoteReq, VoteRes};
 use server::{Envelope, State, LEADER_REFRESH, LEADER_DURATION, PEER_BROADCAST};
 use server::traffic_cop::TrafficCop;
 
@@ -30,11 +31,14 @@ pub struct Server {
     bcast_epoch: u64,
     max_txid: u64,
     state: State,
+    db: DB,
 }
 
 impl Server {
 
-    pub fn run(peer_port: u16, cli_port: u16, peers: Vec<String>) {
+    pub fn run(peer_port: u16, cli_port: u16, storage_dir: String, peers: Vec<String>) {
+        let db = DB::open_default(&storage_dir).unwrap();
+
         // All long-running worker threads get a clone of this
         // Sender.  When they exit, they send over it.  If the
         // Receiver ever completes a read, it means something
@@ -82,6 +86,7 @@ impl Server {
             bcast_epoch: 0,
             max_txid: 0, // TODO(tyler) read from rocksdb
             state: State::Init,
+            db: db,
         }));
 
         // peer request handler thread
@@ -317,11 +322,37 @@ impl Server {
             }
             res.set_redirect(redirect_res);
         } else if cli_req.has_get() {
+            let get_req = cli_req.get_get();
             let mut get_res = GetRes::new();
-            get_res.set_success(true);
-            get_res.set_txid(1337);
-            get_res.set_value(vec![]);
+            self.db.get(get_req.get_key())
+                .map( |value| {
+                    get_res.set_success(true);
+                    get_res.set_value((*value).to_vec());
+                })
+                .on_absent( || {
+                    get_res.set_success(false);
+                    get_res.set_err("Key not found".to_string())
+                })
+                .on_error( |e| {
+                    error!("Operational problem encountered while getting key: {}", e);
+                    get_res.set_success(false);
+                    get_res.set_err("Operational problem encountered".to_string());
+                });
+            get_res.set_txid(self.max_txid);
             res.set_get(get_res);
+        } else if cli_req.has_set() {
+            let set_req = cli_req.get_set();
+            let mut set_res = SetRes::new();
+            match self.db.put(set_req.get_key(), set_req.get_value()) {
+                Ok(_) => set_res.set_success(true),
+                Err(e) => {
+                    error!("Operational problem encountered while setting key: {}", e);
+                    set_res.set_success(false);
+                    set_res.set_err("Operational problem encountered".to_string());
+                }
+            }
+            set_res.set_txid(self.max_txid);
+            res.set_set(set_res);
         }
 
         self.reply(req, ByteBuf::from_slice(
