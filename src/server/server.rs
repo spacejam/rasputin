@@ -324,7 +324,9 @@ impl Server {
             }.unwrap();
             vote_res.set_success(true);
         } else if !self.state.valid_leader() &&
-            vote_req.get_term() > self.highest_term &&
+            // TODO can we avoid term comparison in order to 
+            // prevent term-preempting election?
+            // // vote_req.get_term() > self.highest_term &&
             ((vote_req.get_maxtxid() >= self.max_txid &&
             vote_req.get_last_tx_term() == self.last_tx_term) ||
             (vote_req.get_last_tx_term() > self.last_tx_term)) {
