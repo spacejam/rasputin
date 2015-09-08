@@ -12,14 +12,15 @@ homepage = "https://github.com/the-tetanus-clinic/rasputin"
 keywords = ["database", "HA", "transactions", "distributed-systems"]
 
 [dependencies]
-docopt = "0.6.66"
-log = "0.3.1"
-time = "0.1"
-rustc-serialize = "0.3.15"
-mio = "0.4.2"
 bytes = "0.2.11"
-rand = "0.3"
+docopt = "0.6.66"
 lazy_static="0.1.14"
+log = "0.3.1"
+mio = "0.4.2"
+rand = "0.3"
+rocksdb = "~0.1.1"
+rustc-serialize = "0.3.15"
+time = "0.1"
 
 [dependencies.protobuf]
 git = "https://github.com/stepancheg/rust-protobuf.git"

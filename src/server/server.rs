@@ -364,7 +364,7 @@ impl Server {
     fn reply(&mut self, req: Envelope, res_buf: ByteBuf) {
         self.res_tx.send(Envelope {
             id: req.id,
-            address: Some(req.address.unwrap()),
+            address: req.address,
             tok: req.tok,
             msg: res_buf,
         });
