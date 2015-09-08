@@ -37,8 +37,7 @@ pub struct Server {
 impl Server {
 
     pub fn run(peer_port: u16, cli_port: u16, storage_dir: String, peers: Vec<String>) {
-        let db = DB::open_default(
-            &format!("{}/rasputin.db", storage_dir)).unwrap();
+        let db = DB::open_default(&storage_dir).unwrap();
 
         // All long-running worker threads get a clone of this
         // Sender.  When they exit, they send over it.  If the
