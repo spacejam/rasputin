@@ -110,6 +110,16 @@ impl State {
         }
     }
 
+    fn is_following(&self, id: u64) -> bool {
+        match *self {
+            State::Follower{
+                attempt:_, id: lid, leader_addr: _, until: _, tok: _
+            } =>
+                lid == id,
+            _ => false,
+        }
+    }
+
     fn is_candidate(&self) -> bool {
         match *self {
             State::Candidate{attempt:_, have:_, need:_, until:_} =>

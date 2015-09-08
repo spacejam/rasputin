@@ -20,7 +20,8 @@ use protobuf::Message;
 use time;
 
 use ::{CliReq, CliRes, GetReq, GetRes, PeerMsg,
-    RedirectRes, SetReq, SetRes, VoteReq, VoteRes};
+    RedirectRes, SetReq, SetRes, VoteReq, VoteRes,
+    BatchReq, BatchRes, Propose, Accept, Reject, Learn};
 use server::{Envelope, State, LEADER_REFRESH, LEADER_DURATION, PEER_BROADCAST};
 use server::traffic_cop::TrafficCop;
 
@@ -160,168 +161,294 @@ impl Server {
         panic!("A worker thread unexpectedly exited! Shutting down.");
     }
 
+    fn handle_vote_res(
+        &mut self,
+        env: Envelope,
+        peer_id: u64,
+        vote_res: &VoteRes
+    ) {
+        let mut res = PeerMsg::new();
+        res.set_srvid(self.id);
+        let attempt = self.state.attempt();
+
+        if attempt.is_none() || vote_res.get_attempt() != attempt.unwrap() {
+            // got response for an attempt that is not valid
+            return
+        }
+
+        if self.state.valid_candidate() && !vote_res.get_success() {
+            // reset if we get any nacks
+            self.state = State::Init;
+        } else if self.state.valid_candidate() {
+            // we're currently a candidate, so see if we can ascend to
+            // leader or if we need to give up
+            self.state = match self.state {
+                State::Candidate{
+                    attempt: attempt,
+                    until: until,
+                    need: need,
+                    have: ref have,
+                } => {
+                    let mut new_have = have.clone();
+                    if !new_have.contains(&env.tok) {
+                        new_have.push(env.tok);
+                    }
+                    if new_have.len() >= need as usize {
+                        // we've ascended to leader!
+                        info!("{} transitioning to leader state", self.id);
+                        new_have = vec![];
+                        Some(State::Leader{
+                            attempt: attempt,
+                            until: until,
+                            need: need,
+                            have: new_have,
+                        })
+                    } else {
+                        // we still need more votes
+                        Some(State::Candidate{
+                            attempt: attempt,
+                            until: until,
+                            need: need,
+                            have: new_have,
+                        })
+                    }
+                },
+                _ => None,
+            }.unwrap();
+
+        } else if self.state.is_leader() &&
+            // see if we have a majority of peers, required for extension
+            self.state.valid_leader() &&
+            vote_res.get_success() {
+
+            self.state = match self.state {
+                State::Leader{
+                    attempt: attempt,
+                    until: until,
+                    need: need,
+                    have: ref have
+                } => {
+                    let mut new_until = until;
+                    let mut new_have = have.clone();
+                    if !new_have.contains(&env.tok) {
+                        new_have.push(env.tok);
+                    }
+                    if new_have.len() >= need as usize {
+                        debug!("{} leadership extended", self.id);
+                        new_have = vec![];
+                        new_until = time::now()
+                            .to_timespec()
+                            .add(*LEADER_DURATION);
+                    }
+                    Some(State::Leader{
+                        attempt: attempt,
+                        until: new_until,
+                        need: need,
+                        have: new_have,
+                    })
+                },
+                _ => None,
+            }.unwrap()
+        } else if !vote_res.get_success() {
+            warn!("{} received vote nack from {}", self.id, peer_id);
+        } else {
+            // this can happen if a vote res is received by a follower
+            error!("got vote response, but we can't handle it");
+            error!("valid leader: {}", self.state.valid_leader());
+            error!("is leader: {}", self.state.is_leader());
+            error!("valid candidate: {}", self.state.valid_candidate());
+            error!("is candidate: {}", self.state.is_candidate());
+            error!("res attempt: {}", vote_res.get_attempt());
+            error!("our attempt: {}", self.state.attempt().unwrap());
+        }
+
+    }
+
+    fn handle_vote_req(
+        &mut self,
+        env: Envelope,
+        peer_id: u64,
+        vote_req: &VoteReq
+    ) {
+        let mut res = PeerMsg::new();
+        res.set_srvid(self.id);
+        let mut vote_res = VoteRes::new();
+        vote_res.set_attempt(vote_req.get_attempt());
+
+        // if we are this node (broadcast is naive) then all is well
+        if peer_id == self.id {
+            // reply to self but don't change to follower
+            vote_res.set_success(true);
+        // if we're already following a different node, reject
+        } else if self.state.valid_leader() &&
+            !self.state.following(peer_id) {
+
+            warn!("got unwanted vote req from {}", peer_id);
+            vote_res.set_success(false);
+        // if we're already following this node, keed doing so
+        } else if self.state.following(peer_id) {
+            debug!("{} extending followership of {}", self.id, peer_id);
+            self.state = match self.state {
+                State::Follower{
+                    attempt: attempt,
+                    id: id,
+                    leader_addr: leader_addr,
+                    until: _,
+                    tok: tok,
+                } => Some(State::Follower {
+                    attempt: attempt,
+                    id: id,
+                    leader_addr: leader_addr,
+                    until: time::now().to_timespec().add(*LEADER_DURATION),
+                    tok: tok,
+                }),
+                _ => None,
+            }.unwrap();
+            vote_res.set_success(true);
+        // accept this node as the leader if it has a txid >= ours
+        } else if vote_req.get_maxtxid() >= self.max_txid {
+            info!("new leader {}", peer_id);
+            self.state = State::Follower {
+                id: peer_id,
+                attempt: vote_req.get_attempt(),
+                tok: env.tok,
+                leader_addr: env.address.unwrap(),
+                until: time::now().to_timespec().add(*LEADER_DURATION),
+            };
+            vote_res.set_success(true);
+        // reject if we have a higher max txid
+        } else {
+            vote_res.set_success(false);
+        }
+        res.set_vote_res(vote_res);
+        self.reply(env, ByteBuf::from_slice(
+            &*res.write_to_bytes().unwrap().into_boxed_slice()
+        ));
+    }
+
+    fn handle_batch_req(
+        &mut self,
+        env: Envelope,
+        peer_id: u64,
+        batch_req: &BatchReq
+    ) {
+        let mut res = PeerMsg::new();
+        res.set_srvid(self.id);
+
+        // verify that we are leading
+
+    }
+
+    fn handle_batch_res(
+        &mut self,
+        env: Envelope,
+        peer_id: u64,
+        batch_res: &BatchRes
+    ) {
+        let mut res = PeerMsg::new();
+        res.set_srvid(self.id);
+
+        // verify that we're a follower of this peer
+
+        // try to append batch to last entry (use linking)
+
+    }
+
+    fn handle_propose(
+        &mut self,
+        env: Envelope,
+        peer_id: u64,
+        propose: &Propose
+    ) {
+        let mut res = PeerMsg::new();
+        res.set_srvid(self.id);
+
+        // verify sender is our leader
+        if !self.state.is_following(peer_id) {
+            let mut reject = Reject::new();
+            reject.set_txid(propose.get_txid());
+            res.set_reject(reject);
+        }
+
+        // verify id links
+
+        // append to pending set
+
+        // send accept
+    }
+
+    fn handle_accept(
+        &mut self,
+        env: Envelope,
+        peer_id: u64,
+        accept: &Accept
+    ) {
+        let mut res = PeerMsg::new();
+        res.set_srvid(self.id);
+
+        // verify that we sent this message
+
+        // mark this peer as accepted
+
+        // if we're at quorum, broadcast learn
+    }
+
+    fn handle_reject(
+        &mut self,
+        env: Envelope,
+        peer_id: u64,
+        reject: &Reject
+    ) {
+        let mut res = PeerMsg::new();
+        res.set_srvid(self.id);
+        // handle paxos reject
+
+        // verify that we're leader
+
+        // end paxos reject
+    }
+
+    fn handle_learn(
+        &mut self,
+        env: Envelope,
+        peer_id: u64,
+        learn: &Learn
+    ) {
+        let mut res = PeerMsg::new();
+        res.set_srvid(self.id);
+        // handle paxos learn commit
+
+        // verify that we're following this peer
+
+        // verify that we've accepted this txid
+
+        // if not, perform batchreq
+    }
+
     fn handle_peer(&mut self, env: Envelope) {
         debug!("got peer message!");
         let peer_msg: PeerMsg =
             protobuf::parse_from_bytes(env.msg.bytes()).unwrap();
         let peer_id = peer_msg.get_srvid();
-        let mut res = PeerMsg::new();
-        res.set_srvid(self.id);
 
         if peer_msg.has_vote_res() {
-            // handle vote response
             debug!("got response for vote request");
-            let vote_res = peer_msg.get_vote_res();
-            let attempt = self.state.attempt();
-
-            if attempt.is_none() || vote_res.get_attempt() != attempt.unwrap() {
-                // got response for an attempt that is not valid
-                return
-            }
-
-            if self.state.valid_candidate() && !vote_res.get_success() {
-                // reset if we get any nacks
-                self.state = State::Init;
-            } else if self.state.valid_candidate() {
-                // we're currently a candidate, so see if we can ascend to
-                // leader or if we need to give up
-                self.state = match self.state {
-                    State::Candidate{
-                        attempt: attempt,
-                        until: until,
-                        need: need,
-                        have: ref have,
-                    } => {
-                        let mut new_have = have.clone();
-                        if !new_have.contains(&env.tok) {
-                            new_have.push(env.tok);
-                        }
-                        if new_have.len() >= need as usize {
-                            // we've ascended to leader!
-                            info!("{} transitioning to leader state", self.id);
-                            new_have = vec![];
-                            Some(State::Leader{
-                                attempt: attempt,
-                                until: until,
-                                need: need,
-                                have: new_have,
-                            })
-                        } else {
-                            // we still need more votes
-                            Some(State::Candidate{
-                                attempt: attempt,
-                                until: until,
-                                need: need,
-                                have: new_have,
-                            })
-                        }
-                    },
-                    _ => None,
-                }.unwrap();
-
-            // see if we have a majority of peers, required for extension
-            } else if self.state.is_leader() &&
-                self.state.valid_leader() &&
-                vote_res.get_success() {
-
-                self.state = match self.state {
-                    State::Leader{
-                        attempt: attempt,
-                        until: until,
-                        need: need,
-                        have: ref have
-                    } => {
-                        let mut new_until = until;
-                        let mut new_have = have.clone();
-                        if !new_have.contains(&env.tok) {
-                            new_have.push(env.tok);
-                        }
-                        if new_have.len() >= need as usize {
-                            debug!("{} leadership extended", self.id);
-                            new_have = vec![];
-                            new_until = time::now()
-                                .to_timespec()
-                                .add(*LEADER_DURATION);
-                        }
-                        Some(State::Leader{
-                            attempt: attempt,
-                            until: new_until,
-                            need: need,
-                            have: new_have,
-                        })
-                    },
-                    _ => None,
-                }.unwrap()
-            } else if !vote_res.get_success() {
-                warn!("{} received vote nack from {}", self.id, peer_id);
-            } else {
-                // this can happen if a vote res is received by a follower
-                error!("got vote response, but we can't handle it");
-                error!("valid leader: {}", self.state.valid_leader());
-                error!("is leader: {}", self.state.is_leader());
-                error!("valid candidate: {}", self.state.valid_candidate());
-                error!("is candidate: {}", self.state.is_candidate());
-                error!("res attempt: {}", vote_res.get_attempt());
-                error!("our attempt: {}", self.state.attempt().unwrap());
-            }
-        // end vote response
-
-        // handle vote request
+            self.handle_vote_res(env, peer_id, peer_msg.get_vote_res());
         } else if peer_msg.has_vote_req() {
-            let vote_req = peer_msg.get_vote_req();
-            let mut vote_res = VoteRes::new();
-            vote_res.set_attempt(vote_req.get_attempt());
-
-            // if we are this node (broadcast is naive) then all is well
-            if peer_id == self.id {
-                // reply to self but don't change to follower
-                vote_res.set_success(true);
-            // if we're already following a different node, reject
-            } else if self.state.valid_leader() &&
-                !self.state.following(peer_id) {
-
-                warn!("got unwanted vote req from {}", peer_id);
-                vote_res.set_success(false);
-            // if we're already following this node, keed doing so
-            } else if self.state.following(peer_id) {
-                debug!("{} extending followership of {}", self.id, peer_id);
-                self.state = match self.state {
-                    State::Follower{
-                        attempt: attempt,
-                        id: id,
-                        leader_addr: leader_addr,
-                        until: _,
-                        tok: tok,
-                    } => Some(State::Follower {
-                        attempt: attempt,
-                        id: id,
-                        leader_addr: leader_addr,
-                        until: time::now().to_timespec().add(*LEADER_DURATION),
-                        tok: tok,
-                    }),
-                    _ => None,
-                }.unwrap();
-                vote_res.set_success(true);
-            // accept this node as the leader if it has a txid >= ours
-            } else if vote_req.get_maxtxid() >= self.max_txid {
-                info!("new leader {}", peer_id);
-                self.state = State::Follower {
-                    id: peer_id,
-                    attempt: vote_req.get_attempt(),
-                    tok: env.tok,
-                    leader_addr: env.address.unwrap(),
-                    until: time::now().to_timespec().add(*LEADER_DURATION),
-                };
-                vote_res.set_success(true);
-            // reject if we have a higher max txid
-            } else {
-                vote_res.set_success(false);
-            }
-            res.set_vote_res(vote_res);
-            self.reply(env, ByteBuf::from_slice(
-                &*res.write_to_bytes().unwrap().into_boxed_slice()
-            ));
-        } // end vote request
+            self.handle_vote_req(env, peer_id, peer_msg.get_vote_req());
+        } else if peer_msg.has_batch_req() {
+            self.handle_batch_req(env, peer_id, peer_msg.get_batch_req());
+        } else if peer_msg.has_batch_res() {
+            self.handle_batch_res(env, peer_id, peer_msg.get_batch_res());
+        } else if peer_msg.has_propose() {
+            self.handle_propose(env, peer_id, peer_msg.get_propose());
+        } else if peer_msg.has_accept() {
+            self.handle_accept(env, peer_id, peer_msg.get_accept());
+        } else if peer_msg.has_reject() {
+            self.handle_reject(env, peer_id, peer_msg.get_reject());
+        } else if peer_msg.has_learn() {
+            self.handle_learn(env, peer_id, peer_msg.get_learn());
+        }
     }
 
     fn handle_cli(&mut self, req: Envelope) {
