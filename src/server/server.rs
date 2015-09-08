@@ -14,11 +14,13 @@ use mio::tcp::{TcpListener, TcpStream, TcpSocket};
 use mio::util::Slab;
 use rand::{Rng, thread_rng};
 use rocksdb::{DB, Writable};
+use rocksdb::Options as RocksDBOptions;
 use protobuf;
 use protobuf::Message;
 use time;
 
-use ::{CliReq, CliRes, GetReq, GetRes, PeerMsg, RedirectRes, SetReq, SetRes, VoteReq, VoteRes};
+use ::{CliReq, CliRes, GetReq, GetRes, PeerMsg,
+    RedirectRes, SetReq, SetRes, VoteReq, VoteRes};
 use server::{Envelope, State, LEADER_REFRESH, LEADER_DURATION, PEER_BROADCAST};
 use server::traffic_cop::TrafficCop;
 
@@ -36,8 +38,38 @@ pub struct Server {
 
 impl Server {
 
-    pub fn run(peer_port: u16, cli_port: u16, storage_dir: String, peers: Vec<String>) {
-        let db = DB::open_default(&storage_dir).unwrap();
+    pub fn run(
+        peer_port: u16,
+        cli_port: u16,
+        storage_dir: String,
+        peers: Vec<String>
+    ) {
+        let mut opts = RocksDBOptions::new();
+        let memtable_budget = 1024;
+        opts.optimize_level_style_compaction(memtable_budget);
+        opts.create_if_missing(true);
+        let db = match DB::open_cf(&opts, &storage_dir,
+                                   &["storage", "local_meta"]) {
+            Ok(db) => db,
+            Err(_) => {
+                info!("Attempting to initialize data directory at {}",
+                      storage_dir);
+                match DB::open(&opts, &storage_dir) {
+                    Ok(mut db) => {
+                        db.create_cf(
+                            "storage", &RocksDBOptions::new()).unwrap();
+                        db.create_cf(
+                            "local_meta", &RocksDBOptions::new()).unwrap();
+                        db
+                    },
+                    Err(e) => {
+                        error!("failed to create database at {}", storage_dir);
+                        error!("{}", e);
+                        panic!(e);
+                    },
+                }
+            }
+        };
 
         // All long-running worker threads get a clone of this
         // Sender.  When they exit, they send over it.  If the
@@ -298,11 +330,12 @@ impl Server {
             protobuf::parse_from_bytes(req.msg.bytes()).unwrap();
         let mut res = CliRes::new();
         if !self.state.is_leader() {
-            // If we aren't the leader, we must return some sort of a RedirectRes instead
-            // of a response.
+            // If we aren't the leader, we must return some sort of
+            // a RedirectRes instead of a response.
             let mut redirect_res = RedirectRes::new();
             redirect_res.set_msgid(req.id);
-            // If we're a follower, a leader has been elected, so sets the return address.
+            // If we're a follower, a leader has been elected, so
+            // sets the return address.
             if self.state.is_follower() {
                 let leader_address = match self.state {
                     State::Follower{
@@ -318,7 +351,8 @@ impl Server {
                 redirect_res.set_address(format!("{:?}", leader_address));
             } else {
                 redirect_res.set_success(false);
-                redirect_res.set_err("No leader has been elected yet".to_string());
+                redirect_res
+                    .set_err("No leader has been elected yet".to_string());
             }
             res.set_redirect(redirect_res);
         } else if cli_req.has_get() {
@@ -334,9 +368,10 @@ impl Server {
                     get_res.set_err("Key not found".to_string())
                 })
                 .on_error( |e| {
-                    error!("Operational problem encountered while getting key: {}", e);
+                    error!("Operational problem encountered: {}", e);
                     get_res.set_success(false);
-                    get_res.set_err("Operational problem encountered".to_string());
+                    get_res.set_err(
+                        "Operational problem encountered".to_string());
                 });
             get_res.set_txid(self.max_txid);
             res.set_get(get_res);
@@ -346,9 +381,11 @@ impl Server {
             match self.db.put(set_req.get_key(), set_req.get_value()) {
                 Ok(_) => set_res.set_success(true),
                 Err(e) => {
-                    error!("Operational problem encountered while setting key: {}", e);
+                    error!(
+                        "Operational problem encountered: {}", e);
                     set_res.set_success(false);
-                    set_res.set_err("Operational problem encountered".to_string());
+                    set_res.set_err(
+                        "Operational problem encountered".to_string());
                 }
             }
             set_res.set_txid(self.max_txid);

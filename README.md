@@ -25,10 +25,9 @@ each type supports (possibly-disjoint) transactional range-based operations
 
 ## roadmap
 - [x] mio event loops
-- [ ] leadership for meta group
+- [x] leadership algorithm for a range
+- [x] rocksdb persistence layer
 - [ ] meta table that contains information about collections and replicas
-- [ ] replica stream
 - [ ] high performance consensus algorithm
-- [ ] rocksdb persistence layer
 - [ ] mutable membership over consensus algorithm
 - [ ] lexicographic resharding of keyspace
