@@ -33,6 +33,7 @@ pub struct Server {
     res_tx: mio::Sender<Envelope>,
     bcast_epoch: u64,
     max_txid: u64,
+    last_successful_term: u64,
     state: State,
     db: DB,
 }
@@ -118,6 +119,7 @@ impl Server {
             res_tx: res_tx,
             bcast_epoch: 0,
             max_txid: 0, // TODO(tyler) read from rocksdb
+            last_successful_term: 0, // TODO(tyler) read from rocksdb
             state: State::Init,
             db: db,
         }));
@@ -167,46 +169,59 @@ impl Server {
         peer_id: u64,
         vote_res: &VoteRes
     ) {
-        let mut res = PeerMsg::new();
-        res.set_srvid(self.id);
-        let attempt = self.state.attempt();
+        debug!("got response for vote request");
+        let term = self.state.term();
 
-        if attempt.is_none() || vote_res.get_attempt() != attempt.unwrap() {
-            // got response for an attempt that is not valid
+        if term.is_none() || vote_res.get_term() != term.unwrap() {
+            // got response for an term that is not valid
             return
         }
 
+        // Reset if we get any nacks as a candidate.
+        // This is a difference from Raft, where any node can dethrone
+        // an otherwise healthy leader with a higher term.  We will give
+        // up on our own if we don't get a majority of unique votes
+        // by the time our leader lease expires.  This protects us against
+        // a single partially partitioned node from livelocking our cluster.
         if self.state.valid_candidate() && !vote_res.get_success() {
-            // reset if we get any nacks
+            // try to one-up previous successful terms
+            // TODO(tyler) set it in rocksdb
+            if vote_res.get_term() + 1 > self.last_successful_term {
+                self.last_successful_term = vote_res.get_term() + 1;
+            }
             self.state = State::Init;
         } else if self.state.valid_candidate() {
             // we're currently a candidate, so see if we can ascend to
             // leader or if we need to give up
             self.state = match self.state {
                 State::Candidate{
-                    attempt: attempt,
+                    term: term,
                     until: until,
                     need: need,
                     have: ref have,
                 } => {
                     let mut new_have = have.clone();
-                    if !new_have.contains(&env.tok) {
+                    if !new_have.contains(&env.tok) &&
+                        vote_res.get_term() == term {
                         new_have.push(env.tok);
                     }
                     if new_have.len() >= need as usize {
                         // we've ascended to leader!
+                        self.last_successful_term = vote_res.get_term();
                         info!("{} transitioning to leader state", self.id);
                         new_have = vec![];
-                        Some(State::Leader{
-                            attempt: attempt,
-                            until: until,
+                        let state = State::Leader{
+                            term: term,
+                            until: until, // don't extend until
                             need: need,
                             have: new_have,
-                        })
+                        };
+                        info!("{:?}", state);
+                        Some(state)
                     } else {
                         // we still need more votes
                         Some(State::Candidate{
-                            attempt: attempt,
+                            term: term,
                             until: until,
                             need: need,
                             have: new_have,
@@ -223,14 +238,15 @@ impl Server {
 
             self.state = match self.state {
                 State::Leader{
-                    attempt: attempt,
+                    term: term,
                     until: until,
                     need: need,
                     have: ref have
                 } => {
                     let mut new_until = until;
                     let mut new_have = have.clone();
-                    if !new_have.contains(&env.tok) {
+                    if !new_have.contains(&env.tok) &&
+                        vote_res.get_term() == term {
                         new_have.push(env.tok);
                     }
                     if new_have.len() >= need as usize {
@@ -241,7 +257,7 @@ impl Server {
                             .add(*LEADER_DURATION);
                     }
                     Some(State::Leader{
-                        attempt: attempt,
+                        term: term,
                         until: new_until,
                         need: need,
                         have: new_have,
@@ -258,10 +274,9 @@ impl Server {
             error!("is leader: {}", self.state.is_leader());
             error!("valid candidate: {}", self.state.valid_candidate());
             error!("is candidate: {}", self.state.is_candidate());
-            error!("res attempt: {}", vote_res.get_attempt());
-            error!("our attempt: {}", self.state.attempt().unwrap());
+            error!("res term: {}", vote_res.get_term());
+            error!("our term: {}", self.state.term().unwrap());
         }
-
     }
 
     fn handle_vote_req(
@@ -273,30 +288,33 @@ impl Server {
         let mut res = PeerMsg::new();
         res.set_srvid(self.id);
         let mut vote_res = VoteRes::new();
-        vote_res.set_attempt(vote_req.get_attempt());
+        vote_res.set_term(vote_req.get_term());
 
-        // if we are this node (broadcast is naive) then all is well
         if peer_id == self.id {
+            // if we are this node (broadcast is naive) then all is well
             // reply to self but don't change to follower
             vote_res.set_success(true);
-        // if we're already following a different node, reject
         } else if self.state.valid_leader() &&
+            // if we're already following a different node, reject
             !self.state.following(peer_id) {
 
             warn!("got unwanted vote req from {}", peer_id);
+            // communicate to the source what our term is so they
+            // can quickly get followers when we're dead.
+            vote_res.set_term(self.state.term().unwrap());
             vote_res.set_success(false);
-        // if we're already following this node, keed doing so
         } else if self.state.following(peer_id) {
+            // if we're already following this node, keed doing so
             debug!("{} extending followership of {}", self.id, peer_id);
             self.state = match self.state {
                 State::Follower{
-                    attempt: attempt,
+                    term: term,
                     id: id,
                     leader_addr: leader_addr,
                     until: _,
                     tok: tok,
                 } => Some(State::Follower {
-                    attempt: attempt,
+                    term: term,
                     id: id,
                     leader_addr: leader_addr,
                     until: time::now().to_timespec().add(*LEADER_DURATION),
@@ -305,19 +323,30 @@ impl Server {
                 _ => None,
             }.unwrap();
             vote_res.set_success(true);
-        // accept this node as the leader if it has a txid >= ours
-        } else if vote_req.get_maxtxid() >= self.max_txid {
+        } else if !self.state.valid_leader() &&
+            ((vote_req.get_maxtxid() >= self.max_txid &&
+            vote_req.get_term() == self.last_successful_term) ||
+            (vote_req.get_term() > self.last_successful_term)) {
+
+            // accept this node as the leader
+            self.last_successful_term = vote_req.get_term();
             info!("new leader {}", peer_id);
             self.state = State::Follower {
                 id: peer_id,
-                attempt: vote_req.get_attempt(),
+                term: vote_req.get_term(),
                 tok: env.tok,
                 leader_addr: env.address.unwrap(),
                 until: time::now().to_timespec().add(*LEADER_DURATION),
             };
+            info!("{:?}", self.state);
             vote_res.set_success(true);
-        // reject if we have a higher max txid
         } else {
+            match self.state.term() {
+                Some(term) =>
+                    vote_res.set_term(term),
+                None => (),
+            }
+
             vote_res.set_success(false);
         }
         res.set_vote_res(vote_res);
@@ -334,8 +363,9 @@ impl Server {
     ) {
         let mut res = PeerMsg::new();
         res.set_srvid(self.id);
+        // verify that we're a follower of this peer
 
-        // verify that we are leading
+        // try to append batch to last entry (use linking)
 
     }
 
@@ -348,10 +378,7 @@ impl Server {
         let mut res = PeerMsg::new();
         res.set_srvid(self.id);
 
-        // verify that we're a follower of this peer
-
-        // try to append batch to last entry (use linking)
-
+        // verify that we are leading
     }
 
     fn handle_propose(
@@ -432,7 +459,6 @@ impl Server {
         let peer_id = peer_msg.get_srvid();
 
         if peer_msg.has_vote_res() {
-            debug!("got response for vote request");
             self.handle_vote_res(env, peer_id, peer_msg.get_vote_res());
         } else if peer_msg.has_vote_req() {
             self.handle_vote_req(env, peer_id, peer_msg.get_vote_req());
@@ -466,7 +492,7 @@ impl Server {
             if self.state.is_follower() {
                 let leader_address = match self.state {
                     State::Follower{
-                        attempt: _,
+                        term: _,
                         id: _,
                         leader_addr: leader_addr,
                         until: _,
@@ -530,11 +556,12 @@ impl Server {
         if !self.state.valid_leader() && !self.state.valid_candidate() {
             info!("{} transitioning to candidate state", self.id);
             self.state = State::Candidate {
-                attempt: self.bcast_epoch,
+                term: self.last_successful_term + 1,
                 until: time::now().to_timespec().add(*LEADER_DURATION),
                 need: (self.peers.len() / 2 + 1) as u8,
                 have: vec![],
             };
+            info!("{:?}", self.state);
         }
 
         // request or extend leadership
@@ -545,7 +572,7 @@ impl Server {
             let mut req = PeerMsg::new();
             req.set_srvid(self.id);
             let mut vote_req = VoteReq::new();
-            vote_req.set_attempt(self.state.attempt().unwrap());
+            vote_req.set_term(self.state.term().unwrap());
             vote_req.set_maxtxid(self.max_txid);
             req.set_vote_req(vote_req);
             self.peer_broadcast(
