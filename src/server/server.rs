@@ -33,7 +33,8 @@ pub struct Server {
     res_tx: mio::Sender<Envelope>,
     bcast_epoch: u64,
     max_txid: u64,
-    last_successful_term: u64,
+    highest_term: u64,
+    last_tx_term: u64,
     state: State,
     db: DB,
 }
@@ -119,7 +120,8 @@ impl Server {
             res_tx: res_tx,
             bcast_epoch: 0,
             max_txid: 0, // TODO(tyler) read from rocksdb
-            last_successful_term: 0, // TODO(tyler) read from rocksdb
+            highest_term: 0, // TODO(tyler) read from rocksdb
+            last_tx_term: 0, // TODO(tyler) read from rocksdb
             state: State::Init,
             db: db,
         }));
@@ -184,10 +186,9 @@ impl Server {
         // by the time our leader lease expires.  This protects us against
         // a single partially partitioned node from livelocking our cluster.
         if self.state.valid_candidate() && !vote_res.get_success() {
-            // try to one-up previous successful terms
-            // TODO(tyler) set it in rocksdb
-            if vote_res.get_term() + 1 > self.last_successful_term {
-                self.last_successful_term = vote_res.get_term() + 1;
+            // TODO(tyler) set term in rocksdb
+            if vote_res.get_term() > self.highest_term {
+                self.highest_term = vote_res.get_term();
             }
             self.state = State::Init;
         } else if self.state.valid_candidate() {
@@ -207,7 +208,6 @@ impl Server {
                     }
                     if new_have.len() >= need as usize {
                         // we've ascended to leader!
-                        self.last_successful_term = vote_res.get_term();
                         info!("{} transitioning to leader state", self.id);
                         new_have = vec![];
                         let state = State::Leader{
@@ -295,8 +295,8 @@ impl Server {
             // reply to self but don't change to follower
             vote_res.set_success(true);
         } else if self.state.valid_leader() &&
-            // if we're already following a different node, reject
             !self.state.following(peer_id) {
+            // if we're already following a different node, reject
 
             warn!("got unwanted vote req from {}", peer_id);
             // communicate to the source what our term is so they
@@ -324,12 +324,20 @@ impl Server {
             }.unwrap();
             vote_res.set_success(true);
         } else if !self.state.valid_leader() &&
+            vote_req.get_term() > self.highest_term &&
             ((vote_req.get_maxtxid() >= self.max_txid &&
-            vote_req.get_term() == self.last_successful_term) ||
-            (vote_req.get_term() > self.last_successful_term)) {
+            vote_req.get_last_tx_term() == self.last_tx_term) ||
+            (vote_req.get_last_tx_term() > self.last_tx_term)) {
+            // accept this node as the leader if it has a higher term than
+            // we've ever seen and either one of the following conditions:
+            // 1. it has a higher previous max successful tx term
+            // 2. it has the same previous max successful tx term and at
+            //    least as many entries as we do for it.
+            //
+            // These conditions guarantee that we don't lose acked writes
+            // as long as a majority of our previous nodes stay alive.
 
-            // accept this node as the leader
-            self.last_successful_term = vote_req.get_term();
+            self.highest_term = vote_req.get_term();
             info!("new leader {}", peer_id);
             self.state = State::Follower {
                 id: peer_id,
@@ -555,8 +563,9 @@ impl Server {
         // become candidate if we need to
         if !self.state.valid_leader() && !self.state.valid_candidate() {
             info!("{} transitioning to candidate state", self.id);
+            self.highest_term += 1;
             self.state = State::Candidate {
-                term: self.last_successful_term + 1,
+                term: self.highest_term,
                 until: time::now().to_timespec().add(*LEADER_DURATION),
                 need: (self.peers.len() / 2 + 1) as u8,
                 have: vec![],
