@@ -10,6 +10,7 @@ dependencies = [
  "protobuf 1.0.1 (git+https://github.com/stepancheg/rust-protobuf.git)",
  "quickcheck 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rocksdb 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc-serialize 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "time 0.1.31 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -155,6 +156,14 @@ dependencies = [
 name = "regex-syntax"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "rocksdb"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "libc 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
+]
 
 [[package]]
 name = "rustc-serialize"

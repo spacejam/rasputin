@@ -1,9 +1,9 @@
 syntax = "proto2";
 
-package quall;
+package rasputin;
 
 //
-// Client <-> quall server messages
+// Client <-> rasputin server messages
 //
 message SetReq {
   required bytes key = 1;
@@ -59,6 +59,13 @@ message WatchRes {
   optional string err = 3;
 }
 
+message RedirectRes {
+  required bool success = 1;
+  required uint64 msgid = 2;
+  optional string address = 3;
+  optional string err = 4;
+}
+
 // client top-levl API
 message CliReq {
   optional GetReq get = 1;
@@ -72,6 +79,7 @@ message CliRes {
   optional SetRes set = 2;
   optional CASRes cas = 3;
   optional WatchRes watch = 4;
+  optional RedirectRes redirect = 5;
 }
 
 //

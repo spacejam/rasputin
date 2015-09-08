@@ -7,6 +7,7 @@ pub use serialization::{
     GetReq, GetRes,
     CASReq, CASRes,
     WatchReq, WatchRes,
+    RedirectRes,
     CliReq, CliRes,
     VoteReq, VoteRes,
     BatchReq, BatchRes,

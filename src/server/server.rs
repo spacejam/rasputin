@@ -17,7 +17,7 @@ use protobuf;
 use protobuf::Message;
 use time;
 
-use ::{VoteReq, VoteRes, PeerMsg, CliReq, CliRes};
+use ::{CliReq, CliRes, GetRes, PeerMsg, RedirectRes, VoteReq, VoteRes};
 use server::{Envelope, State, LEADER_REFRESH, LEADER_DURATION, PEER_BROADCAST};
 use server::traffic_cop::TrafficCop;
 
@@ -252,11 +252,13 @@ impl Server {
                     State::Follower{
                         attempt: attempt,
                         id: id,
+                        leader_addr: leader_addr,
                         until: _,
                         tok: tok,
                     } => Some(State::Follower {
                         attempt: attempt,
                         id: id,
+                        leader_addr: leader_addr,
                         until: time::now().to_timespec().add(*LEADER_DURATION),
                         tok: tok,
                     }),
@@ -270,6 +272,7 @@ impl Server {
                     id: peer_id,
                     attempt: vote_req.get_attempt(),
                     tok: env.tok,
+                    leader_addr: env.address.unwrap(),
                     until: time::now().to_timespec().add(*LEADER_DURATION),
                 };
                 vote_res.set_success(true);
@@ -286,9 +289,44 @@ impl Server {
 
     fn handle_cli(&mut self, req: Envelope) {
         debug!("got cli request!");
-        // echo
-        let res = ByteBuf::from_slice(req.msg.bytes());
-        self.reply(req, res);
+        let cli_req: CliReq =
+            protobuf::parse_from_bytes(req.msg.bytes()).unwrap();
+        let mut res = CliRes::new();
+        if !self.state.is_leader() {
+            // If we aren't the leader, we must return some sort of a RedirectRes instead
+            // of a response.
+            let mut redirect_res = RedirectRes::new();
+            redirect_res.set_msgid(req.id);
+            // If we're a follower, a leader has been elected, so sets the return address.
+            if self.state.is_follower() {
+                let leader_address = match self.state {
+                    State::Follower{
+                        attempt: _,
+                        id: _,
+                        leader_addr: leader_addr,
+                        until: _,
+                        tok: _,
+                    } => Some(leader_addr),
+                    _ => None,
+                }.unwrap();
+                redirect_res.set_success(true);
+                redirect_res.set_address(format!("{:?}", leader_address));
+            } else {
+                redirect_res.set_success(false);
+                redirect_res.set_err("No leader has been elected yet".to_string());
+            }
+            res.set_redirect(redirect_res);
+        } else if cli_req.has_get() {
+            let mut get_res = GetRes::new();
+            get_res.set_success(true);
+            get_res.set_txid(1337);
+            get_res.set_value(vec![]);
+            res.set_get(get_res);
+        }
+
+        self.reply(req, ByteBuf::from_slice(
+            &*res.write_to_bytes().unwrap().into_boxed_slice()
+        ));
     }
 
     fn cron(&mut self) {
@@ -326,6 +364,7 @@ impl Server {
     fn reply(&mut self, req: Envelope, res_buf: ByteBuf) {
         self.res_tx.send(Envelope {
             id: req.id,
+            address: req.address,
             tok: req.tok,
             msg: res_buf,
         });
@@ -334,6 +373,7 @@ impl Server {
     fn peer_broadcast(&mut self, msg: ByteBuf) {
         self.res_tx.send(Envelope {
             id: self.bcast_epoch,
+            address: None,
             tok: PEER_BROADCAST,
             msg: msg,
         });
