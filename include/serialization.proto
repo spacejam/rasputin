@@ -27,7 +27,6 @@ message GetRes {
   optional string err = 4;
 }
 
-// The CAS logic happens in the master, then propagates via paxos.
 message CASReq {
   required bytes key = 1;
   required bytes value = 2;
@@ -49,8 +48,9 @@ message WatchReq {
 
 message VersionedKV {
   required uint64 txid = 1;
-  required bytes key = 2;
-  required bytes value = 3;
+  required uint64 term = 2;
+  required bytes key = 3;
+  required bytes value = 4;
 }
 
 message WatchRes {
@@ -96,8 +96,11 @@ message Learn {
 
 message Propose {
   required uint64 txid = 1;
+  required uint64 term = 2;
+  required uint64 last_txid = 3;
+  required uint64 last_term = 4;
   // the first Append implicitly gets an id of txid + 1, second of txid + 2 etc...
-  repeated Append mutations = 2;
+  repeated Append mutations = 5;
 }
 
 message Accept {
@@ -126,7 +129,8 @@ message VoteRes {
 // Log Catch-Up
 //
 message BatchReq {
-  required uint64 fromtxid = 1;
+  required uint64 from_txid = 1;
+  required uint64 from_term = 2;
 }
 message BatchRes {
   repeated VersionedKV history = 1;
