@@ -24,6 +24,7 @@ use mio::{EventLoop, EventSet, PollOpt, Handler, Token, TryWrite, TryRead};
 use mio::tcp::{TcpListener, TcpStream, TcpSocket};
 use mio::util::Slab;
 use rand::{Rng, thread_rng};
+use rocksdb::{DB, Writable};
 use protobuf;
 use protobuf::Message;
 

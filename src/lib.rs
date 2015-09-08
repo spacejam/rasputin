@@ -32,3 +32,4 @@ extern crate mio;
 #[macro_use] extern crate lazy_static;
 extern crate time;
 extern crate rand;
+extern crate rocksdb;
