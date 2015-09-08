@@ -1,3 +1,4 @@
+use std::cmp::PartialEq;
 use std::io::{Error, ErrorKind};
 use std::io;
 use std::net::SocketAddr;
@@ -18,7 +19,7 @@ use protobuf;
 use protobuf::Message;
 use time;
 
-use ::{CliReq, CliRes, GetReq, GetRes, PeerMsg, RedirectRes, SetReq, SetRes, VoteReq, VoteRes};
+use ::{CASReq, CASRes, CliReq, CliRes, GetReq, GetRes, PeerMsg, RedirectRes, SetReq, SetRes, VoteReq, VoteRes};
 use server::{Envelope, State, LEADER_REFRESH, LEADER_DURATION, PEER_BROADCAST};
 use server::traffic_cop::TrafficCop;
 
@@ -353,6 +354,49 @@ impl Server {
             }
             set_res.set_txid(self.max_txid);
             res.set_set(set_res);
+        } else if cli_req.has_cas() {
+            let cas_req = cli_req.get_cas();
+            let mut cas_res = CASRes::new();
+            self.db.get(cas_req.get_key())
+                .map( |value| {
+                    if (*value).to_vec() == cas_req.get_oldvalue() {
+                        match self.db.put(cas_req.get_key(), cas_req.get_value()) {
+                            Ok(_) => cas_res.set_success(true),
+                            Err(e) => {
+                                error!(
+                                    "Operational problem encountered while setting CAS: {}",
+                                    e);
+                                cas_res.set_success(false);
+                                cas_res.set_err(
+                                    "Operational problem encountered".to_string());
+                            }
+                        }
+                    } else {
+                        cas_res.set_success(false);
+                        cas_res.set_err(
+                            "Current value is not equal to old value".to_string());
+                    }
+                })
+                .on_absent( || {
+                    match self.db.put(cas_req.get_key(), cas_req.get_value()) {
+                        Ok(_) => cas_res.set_success(true),
+                        Err(e) => {
+                            error!(
+                                "Operational problem encountered while setting CAS: {}",
+                                e);
+                            cas_res.set_success(false);
+                            cas_res.set_err(
+                                "Operational problem encountered".to_string());
+                        }
+                    }
+                })
+                .on_error( |e| {
+                    error!("Operational problem encountered while getting CAS: {}", e);
+                    cas_res.set_success(false);
+                    cas_res.set_err("Operational problem encountered".to_string());
+                });
+            cas_res.set_txid(self.max_txid);
+            res.set_cas(cas_res);
         }
 
         self.reply(req, ByteBuf::from_slice(
