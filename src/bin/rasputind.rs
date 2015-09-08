@@ -48,7 +48,7 @@ fn main() {
         None => 8880,
     };
 
-    let storage_dir: String = match args.flag_storagedir {
+    let storage_dir: String = match args.flag_storage_dir {
         Some(d) => d,
         None => "/var/lib/rasputin".to_string(),
     };
@@ -69,7 +69,7 @@ struct Args {
     flag_peer_port: Option<u16>,
     flag_peers: String,
     flag_logfile: Option<String>,
-    flag_storagedir: Option<String>,
+    flag_storage_dir: Option<String>,
 }
 
 fn print_banner() {
