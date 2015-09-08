@@ -18,13 +18,13 @@ This program is the Rasputin DB server process.
 
 Usage:
     rasputind --help
-    rasputind [--cli-port=<listening port>] [--peer-port=<listening port>] [--peers=<peers>] [--logfile=<file>] [--storage-dir=<directory>]
+    rasputind [--cli-port=<listening port>] [--peer-port=<listening port>] [--seed-peers=<peers>] [--logfile=<file>] [--storage-dir=<directory>]
 
 Options:
     --help                          Show this help message.
     --cli-port=<port>               Listening port for communication between servers.
     --peer-port=<port>              Listening port for communication with clients.
-    --peers=<host1:port1,...>       List of comma-delimited peers, e.g:
+    --seed-peers=<host1:port1,...>  List of comma-delimited initial peers, e.g:
                                     foo.baz.com:7777,bar.baz.com:7777
     --logfile=<path>                File to log output to instead of stdout.
     --storage-dir=<path>            Directory to store the persisted data in; defaults to /var/lib/rasputin
@@ -53,13 +53,13 @@ fn main() {
         None => "/var/lib/rasputin".to_string(),
     };
 
-    let peers: Vec<String> = args.flag_peers
+    let seed_peers: Vec<String> = args.flag_seed_peers
         .split(",")
         .map(|s| s.to_string())
         .filter(|s| s != "")
         .collect();
 
-    Server::run(peer_port, cli_port, storage_dir, peers);
+    Server::run(peer_port, cli_port, storage_dir, seed_peers);
 }
 
 #[derive(Debug, RustcDecodable)]
@@ -67,7 +67,7 @@ struct Args {
     flag_help: bool,
     flag_cli_port: Option<u16>,
     flag_peer_port: Option<u16>,
-    flag_peers: String,
+    flag_seed_peers: String,
     flag_logfile: Option<String>,
     flag_storage_dir: Option<String>,
 }

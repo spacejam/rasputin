@@ -52,6 +52,8 @@ impl Server {
                                    &["storage", "local_meta"]) {
             Ok(db) => db,
             Err(_) => {
+                info!("Attempting to initialize data directory at {}",
+                      storage_dir);
                 match DB::open(&opts, &storage_dir) {
                     Ok(mut db) => {
                         db.create_cf(

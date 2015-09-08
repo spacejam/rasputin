@@ -6,7 +6,7 @@ for i in {0..4}; do
   target/debug/rasputind \
     --peer-port=777$i \
     --cli-port=888$i \
-    --peers=$peers \
+    --seed-peers=$peers \
     --storage-dir=_test/$i/data \
     --logfile=_test/$i.log &
 done
