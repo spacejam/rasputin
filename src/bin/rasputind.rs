@@ -27,7 +27,7 @@ Options:
     --peers=<host1:port1,...>       List of comma-delimited peers, e.g:
                                     foo.baz.com:7777,bar.baz.com:7777
     --logfile=<path>                File to log output to instead of stdout.
-    --storage-dir=<path>            Directory to store the persisted data in; defaults to /var/db/rasputin
+    --storage-dir=<path>            Directory to store the persisted data in; defaults to /var/lib/rasputin
 ";
 
 fn main() {
@@ -50,7 +50,7 @@ fn main() {
 
     let storage_dir: String = match args.flag_storagedir {
         Some(d) => d,
-        None => "/var/db/rasputin".to_string(),
+        None => "/var/lib/rasputin".to_string(),
     };
 
     let peers: Vec<String> = args.flag_peers
