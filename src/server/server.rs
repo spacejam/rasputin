@@ -21,7 +21,7 @@ use time;
 
 use ::{CliReq, CliRes, GetReq, GetRes, PeerMsg,
     RedirectRes, SetReq, SetRes, VoteReq, VoteRes,
-    BatchReq, BatchRes, Propose, Accept, Reject, Learn};
+    BatchReq, BatchPush, BatchRes, VersionedKV};
 use server::{Envelope, State, LEADER_REFRESH, LEADER_DURATION, PEER_BROADCAST};
 use server::traffic_cop::TrafficCop;
 
@@ -106,7 +106,10 @@ impl Server {
 
         // io event loop thread
         let tex1 = thread_exit_tx.clone();
-        thread::spawn(move || {
+        thread::Builder::new()
+            .name("io loop".to_string())
+            .spawn( move || {
+
             tc.run_event_loop(event_loop);
             tex1.send(());
         });
@@ -129,7 +132,10 @@ impl Server {
         // peer request handler thread
         let srv1 = server.clone();
         let tex2 = thread_exit_tx.clone();
-        thread::spawn(move || {
+        thread::Builder::new()
+            .name("peer request handler".to_string())
+            .spawn( move || {
+
             for req in peer_req_rx {
                 srv1.lock().unwrap().handle_peer(req);
             }
@@ -139,7 +145,10 @@ impl Server {
         // cli request handler thread
         let srv2 = server.clone();
         let tex3 = thread_exit_tx.clone();
-        thread::spawn(move || {
+        thread::Builder::new()
+            .name("cli request handler".to_string())
+            .spawn( move || {
+
             for req in cli_req_rx {
                 srv2.lock().unwrap().handle_cli(req);
             }
@@ -149,7 +158,10 @@ impl Server {
         // cron thread
         let srv3 = server.clone();
         let tex4 = thread_exit_tx.clone();
-        thread::spawn(move || {
+        thread::Builder::new()
+            .name("server cron".to_string())
+            .spawn( move || {
+
             let mut rng = thread_rng();
             loop {
                 thread::sleep_ms(rng.gen_range(400,500));
@@ -379,6 +391,18 @@ impl Server {
 
     }
 
+    fn handle_batch_push(
+        &mut self,
+        env: Envelope,
+        peer_id: u64,
+        batch_push: &BatchPush
+    ) {
+        let mut res = PeerMsg::new();
+        res.set_srvid(self.id);
+
+        // verify that we are leading
+    }
+
     fn handle_batch_res(
         &mut self,
         env: Envelope,
@@ -391,79 +415,7 @@ impl Server {
         // verify that we are leading
     }
 
-    fn handle_propose(
-        &mut self,
-        env: Envelope,
-        peer_id: u64,
-        propose: &Propose
-    ) {
-        let mut res = PeerMsg::new();
-        res.set_srvid(self.id);
-
-        // verify sender is our leader
-        if !self.state.is_following(peer_id) {
-            let mut reject = Reject::new();
-            reject.set_txid(propose.get_txid());
-            res.set_reject(reject);
-        }
-
-        // verify id links
-
-        // append to pending set
-
-        // send accept
-    }
-
-    fn handle_accept(
-        &mut self,
-        env: Envelope,
-        peer_id: u64,
-        accept: &Accept
-    ) {
-        let mut res = PeerMsg::new();
-        res.set_srvid(self.id);
-
-        // verify that we sent this message
-
-        // mark this peer as accepted
-
-        // if we're at quorum, broadcast learn
-    }
-
-    fn handle_reject(
-        &mut self,
-        env: Envelope,
-        peer_id: u64,
-        reject: &Reject
-    ) {
-        let mut res = PeerMsg::new();
-        res.set_srvid(self.id);
-        // handle paxos reject
-
-        // verify that we're leader
-
-        // end paxos reject
-    }
-
-    fn handle_learn(
-        &mut self,
-        env: Envelope,
-        peer_id: u64,
-        learn: &Learn
-    ) {
-        let mut res = PeerMsg::new();
-        res.set_srvid(self.id);
-        // handle paxos learn commit
-
-        // verify that we're following this peer
-
-        // verify that we've accepted this txid
-
-        // if not, perform batchreq
-    }
-
     fn handle_peer(&mut self, env: Envelope) {
-        debug!("got peer message!");
         let peer_msg: PeerMsg =
             protobuf::parse_from_bytes(env.msg.bytes()).unwrap();
         let peer_id = peer_msg.get_srvid();
@@ -474,16 +426,12 @@ impl Server {
             self.handle_vote_req(env, peer_id, peer_msg.get_vote_req());
         } else if peer_msg.has_batch_req() {
             self.handle_batch_req(env, peer_id, peer_msg.get_batch_req());
+        } else if peer_msg.has_batch_push() {
+            self.handle_batch_push(env, peer_id, peer_msg.get_batch_push());
         } else if peer_msg.has_batch_res() {
             self.handle_batch_res(env, peer_id, peer_msg.get_batch_res());
-        } else if peer_msg.has_propose() {
-            self.handle_propose(env, peer_id, peer_msg.get_propose());
-        } else if peer_msg.has_accept() {
-            self.handle_accept(env, peer_id, peer_msg.get_accept());
-        } else if peer_msg.has_reject() {
-            self.handle_reject(env, peer_id, peer_msg.get_reject());
-        } else if peer_msg.has_learn() {
-            self.handle_learn(env, peer_id, peer_msg.get_learn());
+        } else {
+            error!("got unhandled peer message! {:?}", peer_msg);
         }
     }
 
@@ -592,6 +540,23 @@ impl Server {
                 )
             );
         }
+
+        // heartbeat
+        if self.state.is_leader() {
+            let mut vkv = VersionedKV::new();
+            vkv.set_txid(self.new_txid());
+            vkv.set_term(self.state.term().unwrap());
+            vkv.set_key(b"heartbeat".to_vec());
+            vkv.set_value(format!("{}", time::now().to_timespec().sec)
+                          .as_bytes()
+                          .to_vec());
+            self.replicate(vec![vkv]);
+        }
+    }
+
+    fn new_txid(&mut self) -> u64 {
+        self.max_txid += 1;
+        self.max_txid
     }
 
     fn reply(&mut self, req: Envelope, res_buf: ByteBuf) {
@@ -611,5 +576,24 @@ impl Server {
             msg: msg,
         });
         self.bcast_epoch += 1;
+    }
+
+    fn replicate(&mut self, vkvs: Vec<VersionedKV>) {
+        // TODO(tyler) add to replication machine
+        let mut batch_push = BatchPush::new();
+        batch_push.set_batch_id(self.new_txid()); 
+        batch_push.set_from_txid(self.new_txid());
+        batch_push.set_from_term(self.state.term().unwrap());
+        batch_push.set_batch(protobuf::RepeatedField::from_vec(vec![]));
+
+        let mut peer_msg = PeerMsg::new();
+        peer_msg.set_srvid(self.id);
+        peer_msg.set_batch_push(batch_push);
+
+        self.peer_broadcast(
+            ByteBuf::from_slice(
+                &*peer_msg.write_to_bytes().unwrap().into_boxed_slice()
+            )
+        );
     }
 }

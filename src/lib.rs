@@ -10,8 +10,7 @@ pub use serialization::{
     RedirectRes,
     CliReq, CliRes,
     VoteReq, VoteRes,
-    BatchReq, BatchRes,
-    Append, Learn, Propose, Accept, Reject,
+    BatchReq, BatchPush, BatchRes,
     PeerMsg,
 };
 

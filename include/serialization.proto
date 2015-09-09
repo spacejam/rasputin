@@ -83,35 +83,6 @@ message CliRes {
 }
 
 //
-// Propagation
-//
-message Append {
-  required bytes key = 2;
-  required bytes value = 3;
-}
-
-message Learn {
-  required uint64 txid = 1;
-}
-
-message Propose {
-  required uint64 txid = 1;
-  required uint64 term = 2;
-  required uint64 last_txid = 3;
-  required uint64 last_term = 4;
-  // the first Append implicitly gets an id of txid + 1, second of txid + 2 etc...
-  repeated Append mutations = 5;
-}
-
-message Accept {
-  required uint64 txid = 1;
-}
-
-message Reject {
-  required uint64 txid = 1;
-}
-
-//
 // Leadership
 //
 message VoteReq {
@@ -126,14 +97,21 @@ message VoteRes {
 }
 
 //
-// Log Catch-Up
+// Replication
 //
 message BatchReq {
   required uint64 from_txid = 1;
   required uint64 from_term = 2;
 }
+message BatchPush {
+  required uint64 batch_id = 1;
+  required uint64 from_txid = 2;
+  required uint64 from_term = 3;
+  repeated VersionedKV batch = 4;
+}
 message BatchRes {
-  repeated VersionedKV history = 1;
+  required bool accepted = 1;
+  required uint64 batch_id = 2;
 }
 
 // server<->server top-level api
@@ -142,9 +120,6 @@ message PeerMsg {
   optional VoteReq vote_req = 2;
   optional VoteRes vote_res = 3;
   optional BatchReq batch_req = 5;
-  optional BatchRes batch_res = 6;
-  optional Propose propose = 7;
-  optional Accept accept = 8;
-  optional Reject reject = 9;
-  optional Learn learn = 10;
+  optional BatchPush batch_push = 6;
+  optional BatchRes batch_res = 10;
 }
