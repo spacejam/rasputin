@@ -2,6 +2,9 @@
 
 a distributed transactional store
 
+![RasputinDB](/doc/kmiyc.png)
+Format: ![Alt Text](url)
+
 triumvirs: stability, performance, and composability
 
 ###### key types
