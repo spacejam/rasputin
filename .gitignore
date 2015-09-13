@@ -4,6 +4,8 @@
 *.rlib
 *.dll
 *.swp
+*.swo
+*.swn
 
 # Executables
 *.exe

@@ -24,11 +24,12 @@ pub mod server;
 pub mod serialization;
 pub mod logging;
 
-extern crate protobuf;
 extern crate bytes;
-extern crate mio;
 #[macro_use] extern crate log;
 #[macro_use] extern crate lazy_static;
-extern crate time;
+extern crate mio;
+extern crate protobuf;
 extern crate rand;
 extern crate rocksdb;
+extern crate time;
+extern crate uuid;

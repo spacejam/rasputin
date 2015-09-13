@@ -28,7 +28,6 @@ use rand::{Rng, thread_rng};
 use rocksdb::{DB, Writable};
 use protobuf;
 use protobuf::Message;
-
 use time;
 
 pub const SERVER_CLIENTS: Token = Token(0);
@@ -42,18 +41,22 @@ lazy_static! {
         time::Duration::seconds(6);
 }
 
+pub type TXID = u64;
+pub type Term = u64;
+pub type PeerID = String;
+
 #[derive(Debug)]
 pub struct LogEntry<T> {
-    txid: u64,
-    term: u64,
-    last_txid: u64,
-    last_term: u64,
+    txid: TXID,
+    term: Term,
+    last_txid: TXID,
+    last_term: Term,
     entry: T,
 }
 
 #[derive(Debug)]
 pub struct Acked<T> {
-    acks: Vec<RepPeer>,
+    acks: Vec<PeerID>,
     inner: T,
 }
 
@@ -62,16 +65,16 @@ pub struct Acked<T> {
 // a quorum of 1 (need a single subsequent ack from leader)
 #[derive(Debug)]
 pub struct AckedLog<T> {
-    pending: BTreeMap<u64, Acked<LogEntry<T>>>,
-    committed: BTreeMap<u64, LogEntry<T>>,
+    pending: BTreeMap<TXID, Acked<LogEntry<T>>>,
+    committed: BTreeMap<TXID, LogEntry<T>>,
     quorum: usize,
-    last_learned_txid: u64,
-    last_accepted_txid: u64,
-    last_accepted_term: u64,
+    last_learned_txid: TXID,
+    last_accepted_txid: TXID,
+    last_accepted_term: Term,
 }
 
 impl<T: Clone> AckedLog<T> {
-    pub fn append(&mut self, txid: u64, term: u64, entry: T) {
+    pub fn append(&mut self, txid: TXID, term: Term, entry: T) {
         self.pending.insert(txid, Acked{
             acks: vec![],
             inner: LogEntry {
@@ -86,17 +89,17 @@ impl<T: Clone> AckedLog<T> {
         self.last_accepted_term = term;
     }
 
-    pub fn get(&self, txid: u64) -> Option<T> {
+    pub fn get(&self, txid: TXID) -> Option<T> {
         self.pending.get(&txid)
             .map(|al| al.inner.entry.clone())
             .or(self.committed.get(&txid).map(|l| l.entry.clone()))
     }
 
     // returns a set of txid's that have reached quorum
-    pub fn ack(&mut self, txid: u64, peer: RepPeer) -> Vec<u64> {
+    pub fn ack_up_to(&mut self, txid: TXID, peer: PeerID) -> Vec<(Term, TXID)> {
         // append ack
         for (txid, ent) in self.pending.iter_mut() {
-            if ent.inner.txid == *txid {
+            if ent.inner.txid <= *txid {
                 if !ent.acks.contains(&peer) {
                     ent.acks.push(peer)
                 }
@@ -116,14 +119,14 @@ impl<T: Clone> AckedLog<T> {
             // logs during server crash between remove and push.
             let ent = self.pending.remove(&txid).unwrap();
             self.last_learned_txid = ent.inner.txid;
-            reached_quorum.push(txid);
+            reached_quorum.push((ent.inner.term, ent.inner.txid));
             self.committed.insert(txid, ent.inner);
         }
         reached_quorum
     }
 
     // returns the set of txids that have reached quorum
-    pub fn commit_up_to(&mut self, txid: u64) -> Vec<u64> {
+    pub fn commit_up_to(&mut self, txid: TXID) -> Vec<(Term, TXID)> {
         let mut reached_quorum = vec![];
         loop {
             if self.pending.len() != 0 {
@@ -140,7 +143,7 @@ impl<T: Clone> AckedLog<T> {
                 // logs during server crash between remove and push.
                 let ent = self.pending.remove(&txid).unwrap();
                 self.last_learned_txid = ent.inner.txid;
-                reached_quorum.push(txid);
+                reached_quorum.push((ent.inner.term, ent.inner.txid));
                 self.committed.insert(txid, ent.inner);
             }
         }
@@ -149,7 +152,6 @@ impl<T: Clone> AckedLog<T> {
 }
 
 pub struct Envelope {
-    id: u64,
     address: Option<SocketAddr>,
     tok: Token,
     msg: ByteBuf,
@@ -163,31 +165,31 @@ pub struct Peer {
 
 #[derive(Debug, PartialEq)]
 pub struct RepPeer {
-    max_accepted_txid: u64,
-    max_accepted_term: u64,
-    max_sent_txid: u64,
+    last_accepted_term: Term,
+    last_accepted_txid: TXID,
+    max_sent_txid: TXID,
     tok: Token,
-    id: u64,
+    id: PeerID,
     addr: Option<SocketAddr>,
 }
 
 #[derive(Debug, Clone)]
 enum State {
     Leader {
-        term: u64,
+        term: Term,
         have: Vec<Token>,
         need: u8,
         until: time::Timespec,
     },
     Candidate {
-        term: u64,
+        term: Term,
         have: Vec<Token>,
         need: u8,
         until: time::Timespec,
     },
     Follower {
-        term: u64,
-        id: u64,
+        term: Term,
+        id: PeerID,
         tok: Token,
         leader_addr: SocketAddr,
         until: time::Timespec,
@@ -232,12 +234,12 @@ impl State {
         }
     }
 
-    fn is_following(&self, id: u64) -> bool {
+    fn is_following(&self, id: PeerID) -> bool {
         match *self {
             State::Follower{
-                term:_, id: lid, leader_addr: _, until: _, tok: _
+                term:_, id: ref lid, leader_addr: _, until: _, tok: _
             } =>
-                lid == id,
+                *lid == id,
             _ => false,
         }
     }
@@ -271,12 +273,12 @@ impl State {
         }
     }
 
-    fn following(&self, id: u64) -> bool {
+    fn following(&self, id: PeerID) -> bool {
         match *self {
             State::Follower{
-                term:_, id: fid, leader_addr: _, until: until, tok: _
+                term:_, id: ref fid, leader_addr: _, until: until, tok: _
             } =>
-                id == fid,
+                id == *fid,
             _ => false,
         }
     }
@@ -295,7 +297,7 @@ impl State {
         }
     }
 
-    fn term(&self) -> Option<u64> {
+    fn term(&self) -> Option<Term> {
         match *self {
             State::Leader{term: term, have:_, need:_, until: _} =>
                 Some(term),

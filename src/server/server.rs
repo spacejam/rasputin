@@ -19,30 +19,31 @@ use rocksdb::Options as RocksDBOptions;
 use protobuf;
 use protobuf::Message;
 use time;
+use uuid::Uuid;
 
 use ::{CliReq, CliRes, GetReq, GetRes, PeerMsg,
     RedirectRes, SetReq, SetRes, VoteReq, VoteRes,
     Append, AppendRes, VersionedKV};
 use server::{Envelope, State, LEADER_REFRESH, LEADER_DURATION, PEER_BROADCAST};
-use server::{RepPeer, AckedLog, LogEntry};
+use server::{RepPeer, AckedLog, LogEntry, TXID, Term, PeerID};
 use server::traffic_cop::TrafficCop;
 
 pub struct Server {
     peer_port: u16,
     cli_port: u16,
-    id: u64,
+    id: PeerID,
     peers: Vec<String>,
-    rep_peers: BTreeMap<u64, RepPeer>,
+    rep_peers: BTreeMap<PeerID, RepPeer>,
     res_tx: mio::Sender<Envelope>,
-    max_generated_txid: u64,
-    highest_term: u64,
-    last_learned_term: u64,
-    last_learned_txid: u64,
-    last_accepted_term: u64,
-    last_accepted_txid: u64,
+    max_generated_txid: TXID,
+    highest_term: Term,
+    last_learned_term: Term,
+    last_learned_txid: TXID,
+    last_accepted_term: Term,
+    last_accepted_txid: TXID,
     state: State,
     db: DB,
-    rep_log: AckedLog<Vec<u8>>,
+    rep_log: AckedLog<VersionedKV>,
 }
 
 impl Server {
@@ -123,8 +124,7 @@ impl Server {
         let server = Arc::new(Mutex::new(Server {
             peer_port: peer_port,
             cli_port: cli_port,
-            id: peer_port as u64 + cli_port as u64
-                + time::now().to_timespec().nsec as u64,
+            id: Uuid::new_v4().to_string(), // TODO(tyler) read from rocksdb
             res_tx: res_tx,
             max_generated_txid: 0, // TODO(tyler) read from rocksdb
             highest_term: 0, // TODO(tyler) read from rocksdb
@@ -196,26 +196,33 @@ impl Server {
 
     fn update_rep_peers(
         &mut self,
-        peer_id: u64,
+        peer_id: PeerID,
         addr: Option<SocketAddr>,
         tok: Token,
     ) {
+        // don't send replication traffic to self
+        if self.id == peer_id {
+            return;
+        }
+
         // set up a rep peer for this socket, and
         // reset possibly old ones
-        match self.rep_peers.insert(peer_id, RepPeer{
+        match self.rep_peers.insert(peer_id.clone(), RepPeer{
             max_sent_txid: self.last_accepted_txid,
-            max_accepted_txid: self.last_accepted_txid,
-            max_accepted_term: self.last_accepted_term,
+            last_accepted_txid: self.last_accepted_txid,
+            last_accepted_term: self.last_accepted_term,
             tok: tok,
-            id: peer_id,
+            id: peer_id.clone(),
             addr: addr,
         }) {
             Some(old_rep_peer) => {
                 // retain previous offset information
                 let new_rep_peer = self.rep_peers.get_mut(&peer_id).unwrap();
                 new_rep_peer.max_sent_txid = old_rep_peer.max_sent_txid;
-                new_rep_peer.max_accepted_txid = old_rep_peer.max_accepted_txid;
-                new_rep_peer.max_accepted_term = old_rep_peer.max_accepted_term;
+                new_rep_peer.last_accepted_txid =
+                    old_rep_peer.last_accepted_txid;
+                new_rep_peer.last_accepted_term =
+                    old_rep_peer.last_accepted_term;
             },
             _ => (),
         }
@@ -224,7 +231,7 @@ impl Server {
     fn handle_vote_res(
         &mut self,
         env: Envelope,
-        peer_id: u64,
+        peer_id: PeerID,
         vote_res: &VoteRes
     ) {
         debug!("got response for vote request");
@@ -342,11 +349,11 @@ impl Server {
     fn handle_vote_req(
         &mut self,
         env: Envelope,
-        peer_id: u64,
+        peer_id: PeerID,
         vote_req: &VoteReq
     ) {
         let mut res = PeerMsg::new();
-        res.set_srvid(self.id);
+        res.set_srvid(self.id.clone());
         let mut vote_res = VoteRes::new();
         vote_res.set_term(vote_req.get_term());
 
@@ -355,7 +362,7 @@ impl Server {
             // reply to self but don't change to follower
             vote_res.set_success(true);
         } else if self.state.valid_leader() &&
-            !self.state.following(peer_id) {
+            !self.state.following(peer_id.clone()) {
             // if we're already following a different node, reject
 
             warn!("got unwanted vote req from {}", peer_id);
@@ -363,19 +370,19 @@ impl Server {
             // can quickly get followers when we're dead.
             vote_res.set_term(self.state.term().unwrap());
             vote_res.set_success(false);
-        } else if self.state.following(peer_id) {
+        } else if self.state.following(peer_id.clone()) {
             // if we're already following this node, keed doing so
             debug!("{} extending followership of {}", self.id, peer_id);
             self.state = match self.state {
                 State::Follower{
                     term: term,
-                    id: id,
+                    id: ref id,
                     leader_addr: leader_addr,
                     until: _,
                     tok: tok,
                 } => Some(State::Follower {
                     term: term,
-                    id: id,
+                    id: id.clone(),
                     leader_addr: leader_addr,
                     until: time::now().to_timespec().add(*LEADER_DURATION),
                     tok: tok,
@@ -400,7 +407,7 @@ impl Server {
             self.highest_term = vote_req.get_term();
             info!("new leader {}", peer_id);
             self.state = State::Follower {
-                id: peer_id,
+                id: peer_id.clone(),
                 term: vote_req.get_term(),
                 tok: env.tok,
                 leader_addr: env.address.unwrap(),
@@ -419,21 +426,27 @@ impl Server {
         }
         res.set_vote_res(vote_res);
         self.reply(env, ByteBuf::from_slice(
-            &*res.write_to_bytes().unwrap().into_boxed_slice()
+            &*res.write_to_bytes().unwrap()
         ));
     }
 
     fn handle_append(
         &mut self,
         env: Envelope,
-        peer_id: u64,
+        peer_id: PeerID,
         append: &Append
     ) {
+        if self.state.is_leader() {
+            warn!("Leader got append request!  This shouldn't happen.");
+            return;
+        }
+
         let mut res = PeerMsg::new();
-        res.set_srvid(self.id);
+        res.set_srvid(self.id.clone());
         let mut append_res = AppendRes::new();
+
         // verify that we are following this node
-        if self.state.is_following(peer_id) {
+        if self.state.is_following(peer_id.clone()) {
             // verify that it links
             if append.get_from_term() == self.last_accepted_term &&
                 append.get_from_txid() == self.last_accepted_txid {
@@ -442,49 +455,84 @@ impl Server {
                 let mut max_txid = self.last_accepted_txid;
                 for vkv in append.get_batch() {
                     if vkv.get_term() < max_term {
+                        error!("vkv term: {} our max: {}", vkv.get_term(), max_term);
                         panic!("replication stream has decreasing term");
                     }
                     if vkv.get_txid() <= max_txid {
-                        panic!("replication stream has non-increasing txid");
+                        warn!("vkv txid: {} our max: {}", vkv.get_txid(), max_txid);
+                        continue;
                     }
                     max_term = vkv.get_term();
                     max_txid = vkv.get_txid();
                     info!("appending message at {}", vkv.get_txid());
+                    self.rep_log.append(vkv.get_term(), vkv.get_txid(),
+                                        vkv.clone());
+                    self.last_accepted_term = vkv.get_term();
+                    self.last_accepted_txid = vkv.get_txid();
                 }
+                let to_learn = self.rep_log.commit_up_to(max_txid);
+                // TODO(put these in store!)
 
                 append_res.set_accepted(true);
                 append_res.set_last_accepted_term(max_term);
                 append_res.set_last_accepted_txid(max_txid);
+
+                for (term, txid) in
+                    self.rep_log.commit_up_to(append.get_last_learned_txid()) {
+
+                    info!("follower learning txid {}", txid);
+                    self.learn(term, txid);
+                }
             } else {
                 // this update doesn't link to our last entry, so tell the
                 // leader where to replicate from.
                 warn!("failed to link msg from: {}", append.get_from_txid());
+                warn!("{:?}", self.state);
                 append_res.set_accepted(false);
                 append_res.set_last_accepted_term(self.last_accepted_term);
                 append_res.set_last_accepted_txid(self.last_accepted_txid);
             }
-        } else if self.state.is_leader() {
-            // reply to self to keep things streamlined
-            append_res.set_accepted(true);
-            append_res.set_last_accepted_term(self.last_accepted_term);
-            append_res.set_last_accepted_txid(self.last_accepted_txid);
         }
+
         res.set_append_res(append_res);
+
         self.reply(env, ByteBuf::from_slice(
-            &*res.write_to_bytes().unwrap().into_boxed_slice()
+            &*res.write_to_bytes().unwrap()
         ));
     }
 
     fn handle_append_res(
         &mut self,
         env: Envelope,
-        peer_id: u64,
+        peer_id: PeerID,
         append_res: &AppendRes
     ) {
-        let mut res = PeerMsg::new();
-        res.set_srvid(self.id);
         // verify that we are leading
-        //
+        if !self.state.is_leader() {
+            return;
+        }
+
+        // update peer's info (which may be divergent!)
+        let mut accepted = vec![];
+        match self.rep_peers.get_mut(&peer_id) {
+            Some(ref mut rep_peer) => {
+                rep_peer.last_accepted_term =
+                    append_res.get_last_accepted_term();
+                rep_peer.last_accepted_txid =
+                    append_res.get_last_accepted_txid();
+
+                // see if we can mark any updates as accepted
+                accepted = self.rep_log.ack_up_to(
+                    append_res.get_last_accepted_txid(),
+                    peer_id
+                );
+            },
+            None => (),
+        }
+        for (term, txid) in accepted {
+            info!("leader learning txid {}", txid);
+            self.learn(term, txid);
+        }
     }
 
     fn handle_peer(&mut self, env: Envelope) {
@@ -493,13 +541,17 @@ impl Server {
         let peer_id = peer_msg.get_srvid();
 
         if peer_msg.has_vote_res() {
-            self.handle_vote_res(env, peer_id, peer_msg.get_vote_res());
+            self.handle_vote_res(env, peer_id.to_string(),
+                                 peer_msg.get_vote_res());
         } else if peer_msg.has_vote_req() {
-            self.handle_vote_req(env, peer_id, peer_msg.get_vote_req());
+            self.handle_vote_req(env, peer_id.to_string(),
+                                 peer_msg.get_vote_req());
         } else if peer_msg.has_append() {
-            self.handle_append(env, peer_id, peer_msg.get_append());
+            self.handle_append(env, peer_id.to_string(),
+                               peer_msg.get_append());
         } else if peer_msg.has_append_res() {
-            self.handle_append_res(env, peer_id, peer_msg.get_append_res());
+            self.handle_append_res(env, peer_id.to_string(),
+                                   peer_msg.get_append_res());
         } else {
             error!("got unhandled peer message! {:?}", peer_msg);
         }
@@ -510,11 +562,11 @@ impl Server {
         let cli_req: CliReq =
             protobuf::parse_from_bytes(req.msg.bytes()).unwrap();
         let mut res = CliRes::new();
+        res.set_req_id(cli_req.get_req_id());
         if !self.state.is_leader() {
             // If we aren't the leader, we must return some sort of
             // a RedirectRes instead of a response.
             let mut redirect_res = RedirectRes::new();
-            redirect_res.set_msgid(req.id);
             // If we're a follower, a leader has been elected, so
             // sets the return address.
             if self.state.is_follower() {
@@ -574,7 +626,7 @@ impl Server {
         }
 
         self.reply(req, ByteBuf::from_slice(
-            &*res.write_to_bytes().unwrap().into_boxed_slice()
+            &*res.write_to_bytes().unwrap()
         ));
     }
 
@@ -599,7 +651,7 @@ impl Server {
 
             debug!("broadcasting VoteReq");
             let mut req = PeerMsg::new();
-            req.set_srvid(self.id);
+            req.set_srvid(self.id.clone());
             let mut vote_req = VoteReq::new();
             vote_req.set_term(self.state.term().unwrap());
             vote_req.set_last_accepted_term(self.last_accepted_term);
@@ -609,7 +661,7 @@ impl Server {
             req.set_vote_req(vote_req);
             self.peer_broadcast(
                 ByteBuf::from_slice(
-                    &*req.write_to_bytes().unwrap().into_boxed_slice()
+                    &*req.write_to_bytes().unwrap()
                 )
             );
         }
@@ -627,14 +679,13 @@ impl Server {
         }
     }
 
-    fn new_txid(&mut self) -> u64 {
+    fn new_txid(&mut self) -> TXID {
         self.max_generated_txid += 1;
         self.max_generated_txid
     }
 
     fn reply(&mut self, req: Envelope, res_buf: ByteBuf) {
         self.res_tx.send(Envelope {
-            id: req.id,
             address: req.address,
             tok: req.tok,
             msg: res_buf,
@@ -643,7 +694,6 @@ impl Server {
 
     fn peer_broadcast(&mut self, msg: ByteBuf) {
         self.res_tx.send(Envelope {
-            id: 0, // peers don't need msg id's
             address: None,
             tok: PEER_BROADCAST,
             msg: msg,
@@ -652,37 +702,54 @@ impl Server {
 
     fn replicate(&mut self, vkvs: Vec<VersionedKV>) {
         if vkvs.len() > 0 {
-            let vkv = vkvs.iter().cloned().next().unwrap();
-            let mut append = Append::new();
-            append.set_from_txid(self.last_accepted_txid);
-            append.set_from_term(self.last_accepted_term);
-            append.set_batch(protobuf::RepeatedField::from_vec(vkvs));
-            append.set_last_learned_txid(self.last_learned_txid);
-
-            let mut peer_msg = PeerMsg::new();
-            peer_msg.set_srvid(self.id);
-            peer_msg.set_append(append);
-
-            self.rep_log.append(
-                vkv.get_txid(),
-                vkv.get_term(),
-                peer_msg.write_to_bytes().unwrap());
+            for vkv in vkvs {
+                self.rep_log.append(
+                    vkv.get_txid(),
+                    vkv.get_term(),
+                    vkv);
+            }
 
             // for each peer, send them their next message
-            for peer in self.rep_peers.values() {
+            for (_, peer) in self.rep_peers.iter_mut() {
+                let mut append = Append::new();
+                append.set_from_txid(peer.last_accepted_txid);
+                append.set_from_term(peer.last_accepted_term);
+                append.set_last_learned_txid(self.last_learned_txid);
+                let mut batch = vec![];
+                for txid in peer.last_accepted_txid+1..peer.last_accepted_txid + 100 {
+                    match self.rep_log.get(txid) {
+                        Some(vkv) => {
+                            batch.push(vkv.clone());
+                            peer.max_sent_txid = vkv.get_txid();
+                        },
+                        None => (),
+                    }
+                }
+
+                append.set_batch(protobuf::RepeatedField::from_vec(batch));
+
+                let mut peer_msg = PeerMsg::new();
+                peer_msg.set_srvid(self.id.clone());
+                peer_msg.set_append(append);
+
                 self.res_tx.send(Envelope {
-                    id: 0, // peers don't need msg id's
                     address: peer.addr,
                     tok: peer.tok,
                     msg: ByteBuf::from_slice(
-                        &*self.rep_log.get(vkv.get_txid()).unwrap()
+                        &*peer_msg.write_to_bytes().unwrap()
                     ),
                 });
             }
         }
 
         info!("rep log: {:?}", self.rep_log.pending.len());
-        let peer_ids: Vec<u64> = self.rep_peers.keys().cloned().collect();
+        let peer_ids: Vec<PeerID> = self.rep_peers.keys().cloned().collect();
         info!("peers: {:?}", peer_ids);
+    }
+
+    fn learn(&mut self, term: Term, txid: TXID) {
+        self.last_learned_term = term;
+        self.last_learned_txid = txid;
+        // TODO(tyler) write to kv
     }
 }
