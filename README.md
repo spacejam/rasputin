@@ -27,7 +27,7 @@ each type supports (possibly-disjoint) transactional range-based operations
 - [x] mio event loops
 - [x] leadership algorithm for a range
 - [x] rocksdb persistence layer
+- [x] consensus algorithm based on parts of Raft and Paxos
 - [ ] meta table that contains information about collections and replicas
-- [ ] high performance consensus algorithm
 - [ ] mutable membership over consensus algorithm
 - [ ] lexicographic resharding of keyspace
