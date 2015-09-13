@@ -470,8 +470,6 @@ impl Server {
                     self.last_accepted_term = vkv.get_term();
                     self.last_accepted_txid = vkv.get_txid();
                 }
-                let to_learn = self.rep_log.commit_up_to(max_txid);
-                // TODO(put these in store!)
 
                 append_res.set_accepted(true);
                 append_res.set_last_accepted_term(max_term);
@@ -480,7 +478,7 @@ impl Server {
                 for (term, txid) in
                     self.rep_log.commit_up_to(append.get_last_learned_txid()) {
 
-                    info!("follower learning txid {}", txid);
+                    info!("follower learning term {} txid {}", term, txid);
                     self.learn(term, txid);
                 }
             } else {
@@ -704,8 +702,8 @@ impl Server {
         if vkvs.len() > 0 {
             for vkv in vkvs {
                 self.rep_log.append(
-                    vkv.get_txid(),
                     vkv.get_term(),
+                    vkv.get_txid(),
                     vkv);
             }
 

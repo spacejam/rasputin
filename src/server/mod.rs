@@ -74,7 +74,7 @@ pub struct AckedLog<T> {
 }
 
 impl<T: Clone> AckedLog<T> {
-    pub fn append(&mut self, txid: TXID, term: Term, entry: T) {
+    pub fn append(&mut self, term: Term, txid: TXID, entry: T) {
         self.pending.insert(txid, Acked{
             acks: vec![],
             inner: LogEntry {
@@ -95,6 +95,7 @@ impl<T: Clone> AckedLog<T> {
             .or(self.committed.get(&txid).map(|l| l.entry.clone()))
     }
 
+    // Used by leaders to know when they've gotten enough acks.
     // returns a set of txid's that have reached quorum
     pub fn ack_up_to(&mut self, txid: TXID, peer: PeerID) -> Vec<(Term, TXID)> {
         // append ack
@@ -125,27 +126,26 @@ impl<T: Clone> AckedLog<T> {
         reached_quorum
     }
 
+    // Used by followers to commit where the leader told them they should
+    // be learning up to.
     // returns the set of txids that have reached quorum
     pub fn commit_up_to(&mut self, txid: TXID) -> Vec<(Term, TXID)> {
         let mut reached_quorum = vec![];
         loop {
-            if self.pending.len() != 0 {
+            if self.pending.len() == 0 {
                 break;
             }
-            let txid = self.pending.keys().cloned().next().unwrap();
-            if self.pending.get(&txid).unwrap().acks.len() < self.quorum {
+            let next_txid = self.pending.keys().cloned().next().unwrap();
+            if next_txid > txid {
                 break;
             }
-            let ent = self.pending.remove(&txid).unwrap();
+            let ent = self.pending.remove(&next_txid).unwrap();
 
-            if ent.inner.txid <= txid {
-                // TODO(tyler) work out persistence story so we don't lose
-                // logs during server crash between remove and push.
-                let ent = self.pending.remove(&txid).unwrap();
-                self.last_learned_txid = ent.inner.txid;
-                reached_quorum.push((ent.inner.term, ent.inner.txid));
-                self.committed.insert(txid, ent.inner);
-            }
+            // TODO(tyler) work out persistence story so we don't lose
+            // logs during server crash between remove and push.
+            self.last_learned_txid = ent.inner.txid;
+            reached_quorum.push((ent.inner.term, ent.inner.txid));
+            self.committed.insert(txid, ent.inner);
         }
         reached_quorum
     }
