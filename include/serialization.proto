@@ -99,19 +99,18 @@ message VoteRes {
 //
 // Replication
 //
-message BatchReq {
-  required uint64 from_txid = 1;
-  required uint64 from_term = 2;
-}
-message BatchPush {
+message Append {
   required uint64 batch_id = 1;
   required uint64 from_txid = 2;
   required uint64 from_term = 3;
   repeated VersionedKV batch = 4;
 }
-message BatchRes {
+
+message AppendRes {
   required bool accepted = 1;
   required uint64 batch_id = 2;
+  optional uint64 last_learned_txid = 3;
+  optional uint64 last_learned_term = 4;
 }
 
 // server<->server top-level api
@@ -119,7 +118,6 @@ message PeerMsg {
   required uint64 srvid = 1;
   optional VoteReq vote_req = 2;
   optional VoteRes vote_res = 3;
-  optional BatchReq batch_req = 5;
-  optional BatchPush batch_push = 6;
-  optional BatchRes batch_res = 10;
+  optional Append append = 4;
+  optional AppendRes append_res = 5;
 }

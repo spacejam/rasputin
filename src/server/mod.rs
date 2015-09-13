@@ -9,8 +9,10 @@ pub use server::server::Server;
 pub use server::connset::ConnSet;
 pub use server::server_conn::ServerConn;
 
+use std::collections::{BTreeMap};
 use std::io::{Error, ErrorKind};
 use std::io;
+use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::ops::{Add, Sub};
 use std::sync::{Arc, Mutex};
@@ -35,8 +37,94 @@ pub const SERVER_PEERS: Token = Token(1);
 pub const PEER_BROADCAST: Token = Token(usize::MAX);
 
 lazy_static! {
-    pub static ref LEADER_DURATION: time::Duration = time::Duration::seconds(12);
-    pub static ref LEADER_REFRESH: time::Duration = time::Duration::seconds(6);
+    pub static ref LEADER_DURATION: time::Duration =
+        time::Duration::seconds(12);
+    pub static ref LEADER_REFRESH: time::Duration =
+        time::Duration::seconds(6);
+}
+
+pub struct LogEntry<T> {
+    txid: u64,
+    term: u64,
+    last_txid: u64,
+    last_term: u64,
+    entry: T,
+}
+
+pub struct Acked<T> {
+    acks: Vec<Peer>,
+    inner: T,
+}
+
+pub trait Learn<T> {
+    fn learn(&mut self, entry: &LogEntry<T>);
+}
+
+// Leaders and Followers have an AckedLog for handling replication.
+// Leaders have quorums of cluster_sz / 2 + 1, and Followers have
+// a quorum of 1 (need a single subsequent ack from leader)
+pub struct AckedLog<T, L: Learn<T>> {
+    pending: BTreeMap<u64, Acked<LogEntry<T>>>,
+    committed: Vec<LogEntry<T>>,
+    learner: L,
+    quorum: usize,
+    last_committed_txid: u64,
+}
+
+impl<T, L: Learn<T>> AckedLog<T, L> {
+    pub fn append(&mut self, entry: LogEntry<T>) {
+        self.pending.insert(entry.txid, Acked{
+            acks: vec![],
+            inner: entry,
+        });
+    }
+    pub fn ack(&mut self, txid: u64, peer: Peer) {
+        // append ack
+        for (txid, ent) in self.pending.iter_mut() {
+            if ent.inner.txid == *txid {
+                if !ent.acks.contains(&peer) {
+                    ent.acks.push(peer)
+                }
+                break
+            }
+        }
+        loop {
+            if self.pending.len() == 0 {
+                break;
+            }
+            let txid = self.pending.keys().cloned().next().unwrap();
+            if self.pending.get(&txid).unwrap().acks.len() < self.quorum {
+                break;
+            }
+            // TODO(tyler) work out persistence story so we don't lose
+            // logs during server crash between remove and push.
+            let ent = self.pending.remove(&txid).unwrap();
+            self.last_committed_txid = ent.inner.txid;
+            self.learner.learn(&ent.inner);
+            self.committed.push(ent.inner);
+        }
+    }
+    pub fn commit_up_to(&mut self, txid: u64) {
+        loop {
+            if self.pending.len() != 0 {
+                break;
+            }
+            let txid = self.pending.keys().cloned().next().unwrap();
+            if self.pending.get(&txid).unwrap().acks.len() < self.quorum {
+                break;
+            }
+            let ent = self.pending.remove(&txid).unwrap();
+
+            if ent.inner.txid <= txid {
+                // TODO(tyler) work out persistence story so we don't lose
+                // logs during server crash between remove and push.
+                let ent = self.pending.remove(&txid).unwrap();
+                self.last_committed_txid = ent.inner.txid;
+                self.learner.learn(&ent.inner);
+                self.committed.push(ent.inner);
+            }
+        }
+    }
 }
 
 pub struct Envelope {
@@ -46,6 +134,7 @@ pub struct Envelope {
     msg: ByteBuf,
 }
 
+#[derive(PartialEq)]
 pub struct Peer {
     addr: SocketAddr,
     sock: Option<Token>,

@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap};
 use std::io::{Error, ErrorKind};
 use std::io;
 use std::net::SocketAddr;
@@ -21,8 +22,9 @@ use time;
 
 use ::{CliReq, CliRes, GetReq, GetRes, PeerMsg,
     RedirectRes, SetReq, SetRes, VoteReq, VoteRes,
-    BatchReq, BatchPush, BatchRes, VersionedKV};
+    Append, AppendRes, VersionedKV};
 use server::{Envelope, State, LEADER_REFRESH, LEADER_DURATION, PEER_BROADCAST};
+use server::{AckedLog, LogEntry, Learn};
 use server::traffic_cop::TrafficCop;
 
 pub struct Server {
@@ -37,6 +39,8 @@ pub struct Server {
     last_tx_term: u64,
     state: State,
     db: DB,
+    rep_log: AckedLog<Envelope, Sender<u64>>,
+    learned_rx: Receiver<u64>,
 }
 
 impl Server {
@@ -114,12 +118,12 @@ impl Server {
             tex1.send(());
         });
 
+        let (ack_tx, ack_rx) = mpsc::channel();
         let server = Arc::new(Mutex::new(Server {
             peer_port: peer_port,
             cli_port: cli_port,
             id: peer_port as u64 + cli_port as u64
                 + time::now().to_timespec().nsec as u64,
-            peers: peers,
             res_tx: res_tx,
             bcast_epoch: 0,
             max_txid: 0, // TODO(tyler) read from rocksdb
@@ -127,6 +131,15 @@ impl Server {
             last_tx_term: 0, // TODO(tyler) read from rocksdb
             state: State::Init,
             db: db,
+            rep_log: AckedLog {
+                pending: BTreeMap::new(),
+                committed: vec![],
+                learner: ack_tx,
+                quorum: peers.len() / 2 + 1,
+                last_committed_txid: 0, // TODO(tyler) read from rocksdb
+            },
+            peers: peers,
+            learned_rx: ack_rx,
         }));
 
         // peer request handler thread
@@ -336,8 +349,6 @@ impl Server {
             }.unwrap();
             vote_res.set_success(true);
         } else if !self.state.valid_leader() &&
-            // TODO can we avoid term comparison in order to 
-            // prevent term-preempting election?
             vote_req.get_term() >= self.last_tx_term &&
             ((vote_req.get_maxtxid() >= self.max_txid &&
             vote_req.get_last_tx_term() == self.last_tx_term) ||
@@ -377,42 +388,31 @@ impl Server {
         ));
     }
 
-    fn handle_batch_req(
+    fn handle_append(
         &mut self,
         env: Envelope,
         peer_id: u64,
-        batch_req: &BatchReq
+        append: &Append
     ) {
         let mut res = PeerMsg::new();
         res.set_srvid(self.id);
-        // verify that we're a follower of this peer
 
-        // try to append batch to last entry (use linking)
-
+        // verify that we are following this node
+        if self.state.is_following(peer_id) {
+            
+        }
     }
 
-    fn handle_batch_push(
+    fn handle_append_res(
         &mut self,
         env: Envelope,
         peer_id: u64,
-        batch_push: &BatchPush
+        append_res: &AppendRes
     ) {
         let mut res = PeerMsg::new();
         res.set_srvid(self.id);
-
         // verify that we are leading
-    }
-
-    fn handle_batch_res(
-        &mut self,
-        env: Envelope,
-        peer_id: u64,
-        batch_res: &BatchRes
-    ) {
-        let mut res = PeerMsg::new();
-        res.set_srvid(self.id);
-
-        // verify that we are leading
+        //
     }
 
     fn handle_peer(&mut self, env: Envelope) {
@@ -424,12 +424,10 @@ impl Server {
             self.handle_vote_res(env, peer_id, peer_msg.get_vote_res());
         } else if peer_msg.has_vote_req() {
             self.handle_vote_req(env, peer_id, peer_msg.get_vote_req());
-        } else if peer_msg.has_batch_req() {
-            self.handle_batch_req(env, peer_id, peer_msg.get_batch_req());
-        } else if peer_msg.has_batch_push() {
-            self.handle_batch_push(env, peer_id, peer_msg.get_batch_push());
-        } else if peer_msg.has_batch_res() {
-            self.handle_batch_res(env, peer_id, peer_msg.get_batch_res());
+        } else if peer_msg.has_append() {
+            self.handle_append(env, peer_id, peer_msg.get_append());
+        } else if peer_msg.has_append_res() {
+            self.handle_append_res(env, peer_id, peer_msg.get_append_res());
         } else {
             error!("got unhandled peer message! {:?}", peer_msg);
         }
@@ -580,20 +578,26 @@ impl Server {
 
     fn replicate(&mut self, vkvs: Vec<VersionedKV>) {
         // TODO(tyler) add to replication machine
-        let mut batch_push = BatchPush::new();
-        batch_push.set_batch_id(self.new_txid()); 
-        batch_push.set_from_txid(self.new_txid());
-        batch_push.set_from_term(self.state.term().unwrap());
-        batch_push.set_batch(protobuf::RepeatedField::from_vec(vec![]));
+        let mut append = Append::new();
+        append.set_batch_id(self.new_txid()); 
+        append.set_from_txid(self.new_txid());
+        append.set_from_term(self.state.term().unwrap());
+        append.set_batch(protobuf::RepeatedField::from_vec(vec![]));
 
         let mut peer_msg = PeerMsg::new();
         peer_msg.set_srvid(self.id);
-        peer_msg.set_batch_push(batch_push);
+        peer_msg.set_append(append);
 
         self.peer_broadcast(
             ByteBuf::from_slice(
                 &*peer_msg.write_to_bytes().unwrap().into_boxed_slice()
             )
         );
+    }
+}
+
+impl Learn<Envelope> for Sender<u64> {
+    fn learn(&mut self, env: &LogEntry<Envelope>) {
+        self.send(env.txid);
     }
 }
