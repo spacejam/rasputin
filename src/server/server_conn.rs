@@ -123,7 +123,6 @@ impl ServerConn {
 
         for req in self.req_codec.decode(&mut req_buf.flip()) {
             self.req_tx.send(Envelope {
-                id: 5,
                 address: Some(self.sock.peer_addr().unwrap()),
                 tok: self.token.unwrap(),
                 msg: req,
