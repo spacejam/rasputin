@@ -25,7 +25,7 @@ use ::{CliReq, CliRes, GetReq, GetRes, PeerMsg,
     RedirectRes, SetReq, SetRes, VoteReq, VoteRes,
     Append, AppendRes, VersionedKV};
 use server::{Envelope, State, LEADER_REFRESH, LEADER_DURATION, PEER_BROADCAST};
-use server::{RepPeer, AckedLog, LogEntry, TXID, Term, PeerID};
+use server::{RepPeer, AckedLog, LogEntry, TXID, Term, PeerID, PendingReq};
 use server::traffic_cop::TrafficCop;
 
 pub struct Server {
@@ -44,6 +44,7 @@ pub struct Server {
     state: State,
     db: DB,
     rep_log: AckedLog<VersionedKV>,
+    pending: BTreeMap<TXID, PendingReq<VersionedKV>>,
 }
 
 impl Server {
@@ -144,6 +145,7 @@ impl Server {
             },
             peers: peers,
             rep_peers: BTreeMap::new(),
+            pending: BTreeMap::new(),
         }));
 
         // peer request handler thread
@@ -455,11 +457,13 @@ impl Server {
                 let mut max_txid = self.last_accepted_txid;
                 for vkv in append.get_batch() {
                     if vkv.get_term() < max_term {
-                        error!("vkv term: {} our max: {}", vkv.get_term(), max_term);
+                        error!("vkv term: {} our max: {}",
+                               vkv.get_term(), max_term);
                         panic!("replication stream has decreasing term");
                     }
                     if vkv.get_txid() <= max_txid {
-                        warn!("vkv txid: {} our max: {}", vkv.get_txid(), max_txid);
+                        warn!("vkv txid: {} our max: {}",
+                              vkv.get_txid(), max_txid);
                         continue;
                     }
                     max_term = vkv.get_term();
@@ -607,20 +611,20 @@ impl Server {
             get_res.set_txid(self.last_learned_txid);
             res.set_get(get_res);
         } else if cli_req.has_set() {
+            let txid = self.new_txid();
             let set_req = cli_req.get_set();
-            let mut set_res = SetRes::new();
-            match self.db.put(set_req.get_key(), set_req.get_value()) {
-                Ok(_) => set_res.set_success(true),
-                Err(e) => {
-                    error!(
-                        "Operational problem encountered: {}", e);
-                    set_res.set_success(false);
-                    set_res.set_err(
-                        "Operational problem encountered".to_string());
-                }
-            }
-            set_res.set_txid(self.last_learned_txid);
-            res.set_set(set_res);
+            let mut vkv = VersionedKV::new();
+            vkv.set_txid(txid);
+            vkv.set_term(self.state.term().unwrap());
+            vkv.set_key(set_req.get_key().to_vec());
+            vkv.set_value(set_req.get_value().to_vec());
+            self.replicate(vec![vkv.clone()]);
+            self.pending.insert(txid, PendingReq{
+                env: req,
+                entry: vkv.clone(),
+            });
+            // send a response after this txid is learned
+            return;
         }
 
         self.reply(req, ByteBuf::from_slice(
@@ -714,7 +718,9 @@ impl Server {
                 append.set_from_term(peer.last_accepted_term);
                 append.set_last_learned_txid(self.last_learned_txid);
                 let mut batch = vec![];
-                for txid in peer.last_accepted_txid+1..peer.last_accepted_txid + 100 {
+                for txid in
+                    peer.last_accepted_txid+1..peer.last_accepted_txid + 100 {
+
                     match self.rep_log.get(txid) {
                         Some(vkv) => {
                             batch.push(vkv.clone());
@@ -748,6 +754,40 @@ impl Server {
     fn learn(&mut self, term: Term, txid: TXID) {
         self.last_learned_term = term;
         self.last_learned_txid = txid;
-        // TODO(tyler) write to kv
+
+        // TODO(tyler) use persisted crash-proof logic
+        let pending = self.pending.remove(&txid);
+        match pending {
+            Some(p) => {
+                let mut res = CliRes::new();
+                let mut set_res = SetRes::new();
+
+                match self.db.put(p.entry.get_key(), p.entry.get_value()) {
+                    Ok(_) => set_res.set_success(true),
+                    Err(e) => {
+                        error!(
+                            "Operational problem encountered: {}", e);
+                        set_res.set_success(false);
+                        set_res.set_err(
+                            "Operational problem encountered".to_string());
+                    }
+                }
+
+                // If there's a pending client request associated with this,
+                // then send them a response.
+                let req: Result<CliReq, _> =
+                    protobuf::parse_from_bytes(p.env.msg.bytes());
+                if req.is_ok() {
+                    let ok_req = req.unwrap();
+                    let set_req = ok_req.get_set();
+                    res.set_req_id(ok_req.get_req_id());
+                    res.set_set(set_res);
+                    self.reply(p.env, ByteBuf::from_slice(
+                        &*res.write_to_bytes().unwrap()
+                    ));
+                }
+            },
+            None => (),
+        }
     }
 }
