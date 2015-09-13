@@ -464,7 +464,7 @@ impl Server {
                     }
                     max_term = vkv.get_term();
                     max_txid = vkv.get_txid();
-                    info!("appending message at {}", vkv.get_txid());
+                    debug!("accepting message txid {}", vkv.get_txid());
                     self.rep_log.append(vkv.get_term(), vkv.get_txid(),
                                         vkv.clone());
                     self.last_accepted_term = vkv.get_term();
@@ -478,7 +478,7 @@ impl Server {
                 for (term, txid) in
                     self.rep_log.commit_up_to(append.get_last_learned_txid()) {
 
-                    info!("follower learning term {} txid {}", term, txid);
+                    debug!("follower learning term {} txid {}", term, txid);
                     self.learn(term, txid);
                 }
             } else {
@@ -528,7 +528,7 @@ impl Server {
             None => (),
         }
         for (term, txid) in accepted {
-            info!("leader learning txid {}", txid);
+            debug!("leader learning txid {}", txid);
             self.learn(term, txid);
         }
     }
@@ -740,9 +740,9 @@ impl Server {
             }
         }
 
-        info!("rep log: {:?}", self.rep_log.pending.len());
         let peer_ids: Vec<PeerID> = self.rep_peers.keys().cloned().collect();
-        info!("peers: {:?}", peer_ids);
+        debug!("rep log unaccepted len: {:?}", self.rep_log.pending.len());
+        debug!("peers: {:?}", peer_ids);
     }
 
     fn learn(&mut self, term: Term, txid: TXID) {
