@@ -523,6 +523,12 @@ impl Server {
                 rep_peer.last_accepted_txid =
                     append_res.get_last_accepted_txid();
 
+                // reset max sent if we need to backfill
+                if !append_res.get_accepted() {
+                    rep_peer.max_sent_txid =
+                        append_res.get_last_accepted_txid();
+                }
+
                 // see if we can mark any updates as accepted
                 accepted = self.rep_log.ack_up_to(
                     append_res.get_last_accepted_txid(),
@@ -719,7 +725,7 @@ impl Server {
                 append.set_last_learned_txid(self.last_learned_txid);
                 let mut batch = vec![];
                 for txid in
-                    peer.last_accepted_txid+1..peer.last_accepted_txid + 100 {
+                    peer.max_sent_txid+1..peer.max_sent_txid + 100 {
 
                     match self.rep_log.get(txid) {
                         Some(vkv) => {
