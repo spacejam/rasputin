@@ -171,7 +171,7 @@ pub struct RepPeer {
     addr: Option<SocketAddr>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum State {
     Leader {
         term: u64,
