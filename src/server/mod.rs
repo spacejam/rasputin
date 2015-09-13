@@ -1,5 +1,4 @@
 mod store;
-mod paxos;
 mod server;
 mod connset;
 mod server_conn;
@@ -43,6 +42,7 @@ lazy_static! {
         time::Duration::seconds(6);
 }
 
+#[derive(Debug)]
 pub struct LogEntry<T> {
     txid: u64,
     term: u64,
@@ -51,34 +51,49 @@ pub struct LogEntry<T> {
     entry: T,
 }
 
+#[derive(Debug)]
 pub struct Acked<T> {
-    acks: Vec<Peer>,
+    acks: Vec<RepPeer>,
     inner: T,
-}
-
-pub trait Learn<T> {
-    fn learn(&mut self, entry: &LogEntry<T>);
 }
 
 // Leaders and Followers have an AckedLog for handling replication.
 // Leaders have quorums of cluster_sz / 2 + 1, and Followers have
 // a quorum of 1 (need a single subsequent ack from leader)
-pub struct AckedLog<T, L: Learn<T>> {
+#[derive(Debug)]
+pub struct AckedLog<T> {
     pending: BTreeMap<u64, Acked<LogEntry<T>>>,
-    committed: Vec<LogEntry<T>>,
-    learner: L,
+    committed: BTreeMap<u64, LogEntry<T>>,
     quorum: usize,
-    last_committed_txid: u64,
+    last_learned_txid: u64,
+    last_accepted_txid: u64,
+    last_accepted_term: u64,
 }
 
-impl<T, L: Learn<T>> AckedLog<T, L> {
-    pub fn append(&mut self, entry: LogEntry<T>) {
-        self.pending.insert(entry.txid, Acked{
+impl<T: Clone> AckedLog<T> {
+    pub fn append(&mut self, txid: u64, term: u64, entry: T) {
+        self.pending.insert(txid, Acked{
             acks: vec![],
-            inner: entry,
+            inner: LogEntry {
+                txid: txid,
+                term: term,
+                last_txid: self.last_accepted_txid,
+                last_term: self.last_accepted_term,
+                entry: entry,
+            },
         });
+        self.last_accepted_txid = txid;
+        self.last_accepted_term = term;
     }
-    pub fn ack(&mut self, txid: u64, peer: Peer) {
+
+    pub fn get(&self, txid: u64) -> Option<T> {
+        self.pending.get(&txid)
+            .map(|al| al.inner.entry.clone())
+            .or(self.committed.get(&txid).map(|l| l.entry.clone()))
+    }
+
+    // returns a set of txid's that have reached quorum
+    pub fn ack(&mut self, txid: u64, peer: RepPeer) -> Vec<u64> {
         // append ack
         for (txid, ent) in self.pending.iter_mut() {
             if ent.inner.txid == *txid {
@@ -88,6 +103,7 @@ impl<T, L: Learn<T>> AckedLog<T, L> {
                 break
             }
         }
+        let mut reached_quorum = vec![];
         loop {
             if self.pending.len() == 0 {
                 break;
@@ -99,12 +115,16 @@ impl<T, L: Learn<T>> AckedLog<T, L> {
             // TODO(tyler) work out persistence story so we don't lose
             // logs during server crash between remove and push.
             let ent = self.pending.remove(&txid).unwrap();
-            self.last_committed_txid = ent.inner.txid;
-            self.learner.learn(&ent.inner);
-            self.committed.push(ent.inner);
+            self.last_learned_txid = ent.inner.txid;
+            reached_quorum.push(txid);
+            self.committed.insert(txid, ent.inner);
         }
+        reached_quorum
     }
-    pub fn commit_up_to(&mut self, txid: u64) {
+
+    // returns the set of txids that have reached quorum
+    pub fn commit_up_to(&mut self, txid: u64) -> Vec<u64> {
+        let mut reached_quorum = vec![];
         loop {
             if self.pending.len() != 0 {
                 break;
@@ -119,11 +139,12 @@ impl<T, L: Learn<T>> AckedLog<T, L> {
                 // TODO(tyler) work out persistence story so we don't lose
                 // logs during server crash between remove and push.
                 let ent = self.pending.remove(&txid).unwrap();
-                self.last_committed_txid = ent.inner.txid;
-                self.learner.learn(&ent.inner);
-                self.committed.push(ent.inner);
+                self.last_learned_txid = ent.inner.txid;
+                reached_quorum.push(txid);
+                self.committed.insert(txid, ent.inner);
             }
         }
+        reached_quorum
     }
 }
 
@@ -134,10 +155,20 @@ pub struct Envelope {
     msg: ByteBuf,
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Peer {
     addr: SocketAddr,
     sock: Option<Token>,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct RepPeer {
+    max_accepted_txid: u64,
+    max_accepted_term: u64,
+    max_sent_txid: u64,
+    tok: Token,
+    id: u64,
+    addr: Option<SocketAddr>,
 }
 
 #[derive(Debug)]

@@ -87,8 +87,10 @@ message CliRes {
 //
 message VoteReq {
   required uint64 term = 1;
-  required uint64 last_tx_term = 2;
-  required uint64 maxtxid = 3;
+  required uint64 last_learned_term = 2;
+  required uint64 last_learned_txid = 3;
+  required uint64 last_accepted_term = 4;
+  required uint64 last_accepted_txid = 5;
 }
 
 message VoteRes {
@@ -100,17 +102,16 @@ message VoteRes {
 // Replication
 //
 message Append {
-  required uint64 batch_id = 1;
-  required uint64 from_txid = 2;
-  required uint64 from_term = 3;
-  repeated VersionedKV batch = 4;
+  required uint64 from_txid = 1;
+  required uint64 from_term = 2;
+  repeated VersionedKV batch = 3;
+  required uint64 last_learned_txid = 4;
 }
 
 message AppendRes {
   required bool accepted = 1;
-  required uint64 batch_id = 2;
-  optional uint64 last_learned_txid = 3;
-  optional uint64 last_learned_term = 4;
+  optional uint64 last_accepted_txid = 2;
+  optional uint64 last_accepted_term = 3;
 }
 
 // server<->server top-level api
