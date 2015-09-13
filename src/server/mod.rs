@@ -45,6 +45,11 @@ pub type TXID = u64;
 pub type Term = u64;
 pub type PeerID = String;
 
+pub struct PendingReq<T> {
+    env: Envelope,
+    entry: T,
+}
+
 #[derive(Debug)]
 pub struct LogEntry<T> {
     txid: TXID,
@@ -200,7 +205,7 @@ enum State {
 impl State {
     fn valid_leader(&self) -> bool {
         match *self {
-            State::Leader{term:_, have:_, need:_, until: until} =>
+            State::Leader{until: until, ..} =>
                 time::now().to_timespec() < until,
             State::Follower{
                 term:_, id:_, leader_addr: _, until: until, tok: _
@@ -212,7 +217,7 @@ impl State {
 
     fn valid_candidate(&self) -> bool {
         match *self {
-            State::Candidate{term:_, until: until, have:_, need:_} =>
+            State::Candidate{until: until, ..} =>
                 time::now().to_timespec() < until,
             _ => false,
         }
@@ -220,7 +225,7 @@ impl State {
 
     fn is_leader(&self) -> bool {
         match *self {
-            State::Leader{term:_, have:_, need:_, until:_} =>
+            State::Leader{..} =>
                 true,
             _ => false,
         }
@@ -228,7 +233,7 @@ impl State {
 
     fn is_follower(&self) -> bool {
         match *self {
-            State::Follower{term:_, id:_, leader_addr: _, until: _, tok: _} =>
+            State::Follower{..} =>
                 true,
             _ => false,
         }
@@ -236,9 +241,7 @@ impl State {
 
     fn is_following(&self, id: PeerID) -> bool {
         match *self {
-            State::Follower{
-                term:_, id: ref lid, leader_addr: _, until: _, tok: _
-            } =>
+            State::Follower{id: ref lid, .. } =>
                 *lid == id,
             _ => false,
         }
@@ -246,7 +249,7 @@ impl State {
 
     fn is_candidate(&self) -> bool {
         match *self {
-            State::Candidate{term:_, have:_, need:_, until:_} =>
+            State::Candidate{..} => 
                 true,
             _ => false,
         }
@@ -254,7 +257,7 @@ impl State {
 
     fn should_extend_leadership(&self) -> bool {
         match *self {
-            State::Leader{term:_, have:_, need:_, until: until} => {
+            State::Leader{until: until, ..} => {
                 let now = time::now().to_timespec();
                 now.add(*LEADER_REFRESH) >= until && now < until
             },
@@ -264,9 +267,9 @@ impl State {
 
     fn can_extend_lead(&self) -> bool {
         match *self {
-            State::Candidate{term:_, until:_, have: ref have, need: need} =>
+            State::Candidate{have: ref have, need: need, ..} =>
                 have.len() > need as usize,
-            State::Leader{term:_, have: ref have, need: need, until:_} =>
+            State::Leader{have: ref have, need: need, ..} =>
                 have.len() > need as usize,
             _ =>
                 false,
@@ -275,9 +278,7 @@ impl State {
 
     fn following(&self, id: PeerID) -> bool {
         match *self {
-            State::Follower{
-                term:_, id: ref fid, leader_addr: _, until: until, tok: _
-            } =>
+            State::Follower{id: ref fid, until: until, .. } =>
                 id == *fid,
             _ => false,
         }
@@ -285,13 +286,11 @@ impl State {
 
     fn until(&self) -> Option<time::Timespec> {
         match *self {
-            State::Leader{term:_, have:_, need:_, until: until} =>
+            State::Leader{until: until, ..} =>
                 Some(until),
-            State::Candidate{term:_, until: until, have: _, need: _} =>
+            State::Candidate{until: until, ..} =>
                 Some(until),
-            State::Follower{
-                term:_, id:_, leader_addr: _, until: until, tok: _
-            } =>
+            State::Follower{ until: until, .. } =>
                 Some(until),
             _ => None,
         }
@@ -299,13 +298,11 @@ impl State {
 
     fn term(&self) -> Option<Term> {
         match *self {
-            State::Leader{term: term, have:_, need:_, until: _} =>
+            State::Leader{term: term, ..} =>
                 Some(term),
-            State::Candidate{term: term, until:_, have: _, need: _} =>
+            State::Candidate{term: term, ..} =>
                 Some(term),
-            State::Follower{
-                term: term, id:_, leader_addr: _, until: _, tok: _
-            } =>
+            State::Follower{term: term, .. } =>
                 Some(term),
             _ => None,
         }
