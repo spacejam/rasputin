@@ -1,6 +1,6 @@
 # Rasputin DB :globe_with_meridians:
 
-flexible distributed consistent store
+flexible causally-consistent distributed store
 
 ![RasputinDB](/doc/kmiyc.png)
 
@@ -33,3 +33,4 @@ each type supports (possibly-disjoint) transactional range-based operations
 - [x] multipaxos consensus
 - [ ] reconfigurable membership
 - [ ] range splitting
+- [ ] mesos framework
