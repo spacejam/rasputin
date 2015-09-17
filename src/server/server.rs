@@ -3,6 +3,7 @@ use std::io::{Error, ErrorKind};
 use std::io;
 use std::net::SocketAddr;
 use std::ops::{Add, Sub};
+use std::process;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Sender, Receiver};
 use std::thread;
@@ -23,7 +24,7 @@ use uuid::Uuid;
 
 use ::{CliReq, CliRes, GetReq, GetRes, PeerMsg,
     RedirectRes, SetReq, SetRes, VoteReq, VoteRes,
-    Append, AppendRes, VersionedKV};
+    Append, AppendRes, Mutation, MutationType, Version, KV};
 use server::{Envelope, State, LEADER_REFRESH, LEADER_DURATION, PEER_BROADCAST};
 use server::{RepPeer, AckedLog, LogEntry, TXID, Term, PeerID};
 use server::traffic_cop::TrafficCop;
@@ -34,7 +35,7 @@ pub struct Server {
     id: PeerID,
     peers: Vec<String>,
     rep_peers: BTreeMap<PeerID, RepPeer>,
-    res_tx: mio::Sender<Envelope>,
+    rpc_tx: mio::Sender<Envelope>,
     max_generated_txid: TXID,
     highest_term: Term,
     last_learned_term: Term,
@@ -43,7 +44,7 @@ pub struct Server {
     last_accepted_txid: TXID,
     state: State,
     db: DB,
-    rep_log: AckedLog<VersionedKV>,
+    rep_log: AckedLog<Mutation>,
     pending: BTreeMap<TXID, (Envelope, u64)>,
 }
 
@@ -105,17 +106,20 @@ impl Server {
             cli_req_tx,
         ).unwrap();
 
+        // A single MIO EventLoop handles our IO
         let mut event_loop = EventLoop::new().unwrap();
-        let res_tx = event_loop.channel();
+
+        // All RPC's are sent over the event_loop's
+        // notification channel.
+        let rpc_tx = event_loop.channel();
 
         // start server periodic tasks
-        let mut rng = thread_rng();
-        event_loop.timeout_ms((), rng.gen_range(200,500)).unwrap();
+        event_loop.timeout_ms((), thread_rng().gen_range(200,500)).unwrap();
 
-        // io event loop thread
+        // IO event loop thread
         let tex1 = thread_exit_tx.clone();
         thread::Builder::new()
-            .name("io loop".to_string())
+            .name("IO loop".to_string())
             .spawn( move || {
 
             tc.run_event_loop(event_loop);
@@ -126,7 +130,7 @@ impl Server {
             peer_port: peer_port,
             cli_port: cli_port,
             id: Uuid::new_v4().to_string(), // TODO(tyler) read from rocksdb
-            res_tx: res_tx,
+            rpc_tx: rpc_tx,
             max_generated_txid: 0, // TODO(tyler) read from rocksdb
             highest_term: 0, // TODO(tyler) read from rocksdb
             last_accepted_txid: 0, // TODO(tyler) read from rocksdb
@@ -156,7 +160,13 @@ impl Server {
             .spawn( move || {
 
             for req in peer_req_rx {
-                srv1.lock().unwrap().handle_peer(req);
+                match srv1.lock() {
+                    Ok(mut srv) => srv.handle_peer(req),
+                    Err(e) => {
+                        error!("{}", e);
+                        process::exit(1);
+                    }
+                }
             }
             tex2.send(());
         });
@@ -169,7 +179,13 @@ impl Server {
             .spawn( move || {
 
             for req in cli_req_rx {
-                srv2.lock().unwrap().handle_cli(req);
+                match srv2.lock() {
+                    Ok(mut srv) => srv.handle_cli(req),
+                    Err(e) => {
+                        error!("{}", e);
+                        process::exit(1);
+                    }
+                }
             }
             tex3.send(());
         });
@@ -184,7 +200,13 @@ impl Server {
             let mut rng = thread_rng();
             loop {
                 thread::sleep_ms(rng.gen_range(400,500));
-                srv3.lock().unwrap().cron();
+                match srv3.lock() {
+                    Ok(mut srv) => srv.cron(),
+                    Err(e) => {
+                        error!("{}", e);
+                        process::exit(1);
+                    }
+                }
             }
             tex4.send(());
         });
@@ -455,24 +477,27 @@ impl Server {
 
                 let mut max_term = self.last_accepted_term;
                 let mut max_txid = self.last_accepted_txid;
-                for vkv in append.get_batch() {
-                    if vkv.get_term() < max_term {
-                        error!("vkv term: {} our max: {}",
-                               vkv.get_term(), max_term);
+                for mutation in append.get_batch() {
+                    let version = mutation.get_version();
+                    if version.get_term() < max_term {
+                        error!("mutation term: {} our max: {}",
+                               version.get_term(), max_term);
                         panic!("replication stream has decreasing term");
                     }
-                    if vkv.get_txid() <= max_txid {
-                        warn!("vkv txid: {} our max: {}",
-                              vkv.get_txid(), max_txid);
+                    if version.get_txid() <= max_txid {
+                        warn!("mutation txid: {} our max: {}",
+                              version.get_txid(), max_txid);
                         continue;
                     }
-                    max_term = vkv.get_term();
-                    max_txid = vkv.get_txid();
-                    debug!("accepting message txid {}", vkv.get_txid());
-                    self.rep_log.append(vkv.get_term(), vkv.get_txid(),
-                                        vkv.clone());
-                    self.last_accepted_term = vkv.get_term();
-                    self.last_accepted_txid = vkv.get_txid();
+                    max_term = version.get_term();
+                    max_txid = version.get_txid();
+                    debug!("accepting message txid {}",
+                           version.get_txid());
+                    self.rep_log.append(version.get_term(),
+                                        version.get_txid(),
+                                        mutation.clone());
+                    self.last_accepted_term = version.get_term();
+                    self.last_accepted_txid = version.get_txid();
                 }
 
                 append_res.set_accepted(true);
@@ -619,14 +644,24 @@ impl Server {
         } else if cli_req.has_set() {
             let txid = self.new_txid();
             let set_req = cli_req.get_set();
-            let mut vkv = VersionedKV::new();
-            vkv.set_txid(txid);
-            vkv.set_term(self.state.term().unwrap());
-            vkv.set_key(set_req.get_key().to_vec());
-            vkv.set_value(set_req.get_value().to_vec());
-            self.replicate(vec![vkv.clone()]);
+
+            // replicate the mutation
+            let mut version = Version::new();
+            version.set_txid(txid);
+            version.set_term(self.state.term().unwrap());
+
+            let mut kv = KV::new();
+            kv.set_key(set_req.get_key().to_vec());
+            kv.set_value(set_req.get_value().to_vec());
+
+            let mut mutation = Mutation::new();
+            mutation.set_field_type(MutationType::KVSET);
+            mutation.set_version(version);
+            mutation.set_kv(kv);
+
+            self.replicate(vec![mutation.clone()]);
             self.pending.insert(txid, (req, cli_req.get_req_id()));
-            // send a response after this txid is learned
+            // send a response later after this txid is learned
             return;
         }
 
@@ -673,14 +708,22 @@ impl Server {
 
         // heartbeat
         if self.state.is_leader() {
-            let mut vkv = VersionedKV::new();
-            vkv.set_txid(self.new_txid());
-            vkv.set_term(self.state.term().unwrap());
-            vkv.set_key(b"heartbeat".to_vec());
-            vkv.set_value(format!("{}", time::now().to_timespec().sec)
+            let mut version = Version::new();
+            version.set_txid(self.new_txid());
+            version.set_term(self.state.term().unwrap());
+
+            let mut kv = KV::new();
+            kv.set_key(b"heartbeat".to_vec());
+            kv.set_value(format!("{}", time::now().to_timespec().sec)
                           .as_bytes()
                           .to_vec());
-            self.replicate(vec![vkv]);
+
+            let mut mutation = Mutation::new();
+            mutation.set_field_type(MutationType::KVSET);
+            mutation.set_version(version);
+            mutation.set_kv(kv);
+
+            self.replicate(vec![mutation]);
         }
     }
 
@@ -690,7 +733,7 @@ impl Server {
     }
 
     fn reply(&mut self, req: Envelope, res_buf: ByteBuf) {
-        self.res_tx.send(Envelope {
+        self.rpc_tx.send(Envelope {
             address: req.address,
             tok: req.tok,
             msg: res_buf,
@@ -698,20 +741,20 @@ impl Server {
     }
 
     fn peer_broadcast(&mut self, msg: ByteBuf) {
-        self.res_tx.send(Envelope {
+        self.rpc_tx.send(Envelope {
             address: None,
             tok: PEER_BROADCAST,
             msg: msg,
         });
     }
 
-    fn replicate(&mut self, vkvs: Vec<VersionedKV>) {
-        if vkvs.len() > 0 {
-            for vkv in vkvs {
+    fn replicate(&mut self, mutations: Vec<Mutation>) {
+        if mutations.len() > 0 {
+            for mutation in mutations {
                 self.rep_log.append(
-                    vkv.get_term(),
-                    vkv.get_txid(),
-                    vkv);
+                    mutation.get_version().get_term(),
+                    mutation.get_version().get_txid(),
+                    mutation);
             }
 
             // for each peer, send them their next message
@@ -725,9 +768,11 @@ impl Server {
                     peer.max_sent_txid+1..peer.max_sent_txid + 100 {
 
                     match self.rep_log.get(txid) {
-                        Some(vkv) => {
-                            batch.push(vkv.clone());
-                            peer.max_sent_txid = vkv.get_txid();
+                        Some(mutation) => {
+                            batch.push(mutation.clone());
+                            peer.max_sent_txid = mutation
+                                                    .get_version()
+                                                    .get_txid();
                         },
                         None => (),
                     }
@@ -739,7 +784,7 @@ impl Server {
                 peer_msg.set_srvid(self.id.clone());
                 peer_msg.set_append(append);
 
-                self.res_tx.send(Envelope {
+                self.rpc_tx.send(Envelope {
                     address: peer.addr,
                     tok: peer.tok,
                     msg: ByteBuf::from_slice(
@@ -760,8 +805,10 @@ impl Server {
 
         let mut set_res = SetRes::new();
 
-        let vkv = self.rep_log.get(txid).unwrap();
-        match self.db.put(vkv.get_key(), vkv.get_value()) {
+        let mutation = self.rep_log.get(txid).unwrap();
+        // TODO(tyler) handle different types of mutations
+        let kv = mutation.get_kv();
+        match self.db.put(kv.get_key(), kv.get_value()) {
             Ok(_) => set_res.set_success(true),
             Err(e) => {
                 error!(

@@ -46,16 +46,9 @@ message WatchReq {
   required bool historical = 4;
 }
 
-message VersionedKV {
-  required uint64 txid = 1;
-  required uint64 term = 2;
-  required bytes key = 3;
-  required bytes value = 4;
-}
-
 message WatchRes {
   required bool success = 1;
-  repeated VersionedKV history = 2;
+  repeated Mutation history = 2;
   optional string err = 3;
 }
 
@@ -63,6 +56,29 @@ message RedirectRes {
   required bool success = 1;
   optional string address = 2;
   optional string err = 3;
+}
+
+// datatypes
+enum MutationType {
+  KVSET = 1;
+  KVCAS = 2;
+  KVDEL = 3;
+}
+
+message Mutation {
+  required MutationType type = 1;
+  required Version version = 2;
+  optional KV kv = 3;
+}
+
+message Version {
+  required uint64 txid = 1;
+  required uint64 term = 2;
+}
+
+message KV {
+  required bytes key = 1;
+  optional bytes value = 2;
 }
 
 // client top-levl API
@@ -105,7 +121,7 @@ message VoteRes {
 message Append {
   required uint64 from_txid = 1;
   required uint64 from_term = 2;
-  repeated VersionedKV batch = 3;
+  repeated Mutation batch = 3;
   required uint64 last_learned_txid = 4;
 }
 

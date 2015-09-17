@@ -9,7 +9,7 @@ authors = [
 ]
 license = "Apache-2.0"
 homepage = "https://github.com/the-tetanus-clinic/rasputin"
-keywords = ["database", "HA", "transactions", "distributed-systems"]
+keywords = ["database", "HA", "transactions", "distributed-systems", "paxos"]
 
 [dependencies]
 bytes = "0.2.11"
