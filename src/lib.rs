@@ -2,7 +2,8 @@
 #![crate_type = "lib"]
 
 pub use serialization::{
-    VersionedKV,
+    Mutation, MutationType,
+    Version, KV,
     SetReq, SetRes,
     GetReq, GetRes,
     CASReq, CASRes,
