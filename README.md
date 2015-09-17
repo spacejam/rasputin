@@ -4,26 +4,24 @@ flexible causally-consistent distributed store
 
 ![RasputinDB](/doc/kmiyc.png)
 
-triumvirs: stability, performance, and composability
+triumvirs: operational clarity, performance and composability
 
-###### simple collection types
+###### simple persistent collection types
 
-1. kv: RocksDB
-2. log: sequential files with configurable retention policies
-3. object: system VFS
-
-each type supports (possibly-disjoint) transactional range-based operations
+1. kv: backed by RocksDB
+2. log: Kafka-like sequential segment files
+3. object: files on system VFS
 
 ###### uniform client semantics
 
-* read/write/CAS/delete a range
-* subscribe: receive an in-order mutation stream for a range
-* watch: receive a notification (at most once, not reliable) when a mutation occurs in a range
+* read/write/CAS/delete
+* subscribe: in-order mutation stream
+* watch: at most once mutation notification
 
 ###### replication modes (per-collection)
 
-1. consensus: for use where loss of acked writes is unacceptable, and throughput is willing to be sacrificed
-2. async: for high-throughput writes which can tolerate a finite window of data loss in the event of a master failure
+1. consensus: mutations block on replication to a quorum
+2. async: mutations return quickly, and are replicated later
 
 ## roadmap
 - [x] mio event loops
@@ -34,3 +32,4 @@ each type supports (possibly-disjoint) transactional range-based operations
 - [ ] reconfigurable membership
 - [ ] range splitting
 - [ ] mesos framework
+- [ ] c/jvm/python/ruby/go client libs
