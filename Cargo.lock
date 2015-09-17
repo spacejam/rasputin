@@ -7,7 +7,7 @@ dependencies = [
  "lazy_static 0.1.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "protobuf 1.0.1 (git+https://github.com/stepancheg/rust-protobuf.git)",
+ "protobuf 1.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "quickcheck 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "rocksdb 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -121,8 +121,8 @@ dependencies = [
 
 [[package]]
 name = "protobuf"
-version = "1.0.1"
-source = "git+https://github.com/stepancheg/rust-protobuf.git#287cf3c4aa2d8ed04a9ee9de8e3ecada34b2824d"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "quickcheck"
