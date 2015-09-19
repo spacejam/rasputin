@@ -77,7 +77,7 @@ impl log::Log for FileLogger {
                                    record.level(),
                                    time::now().to_timespec().sec,
                                    record.location()
-                                    .file().split("/").last().unwrap(),
+                                         .file().split("/").last().unwrap(),
                                    record.location().line(),
                                    record.args()).as_bytes());
         }
