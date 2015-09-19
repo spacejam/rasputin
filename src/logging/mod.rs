@@ -20,9 +20,11 @@ impl log::Log for StdoutLogger {
 
     fn log(&self, record: &LogRecord) {
         if self.enabled(record.metadata()) {
-            println!("{} - {} - {}",
+            println!("{} {} {}:{}] {}",
                      record.level(),
                      time::now().to_timespec().sec,
+                     record.location().file().split("/").last().unwrap(),
+                     record.location().line(),
                      record.args());
         }
     }
@@ -71,9 +73,12 @@ impl log::Log for FileLogger {
             let mut logfile = self.file.clone();
             logfile.lock()
                 .unwrap()
-                .write_all(format!("{} - {} - {}\n",
+                .write_all(format!("{} {} {}:{}] {}\n",
                                    record.level(),
                                    time::now().to_timespec().sec,
+                                   record.location()
+                                    .file().split("/").last().unwrap(),
+                                   record.location().line(),
                                    record.args()).as_bytes());
         }
     }
