@@ -1,6 +1,5 @@
 use std::io;
 use std::sync::mpsc::Sender;
-use std::usize;
 
 use bytes::{Buf, ByteBuf};
 use mio::{EventLoop, EventSet, PollOpt, Token, TryWrite, TryRead};

@@ -4,25 +4,26 @@ mod connset;
 mod server_conn;
 mod traffic_cop;
 mod acked_log;
+pub mod rocksdb;
 
 pub use server::server::Server;
 pub use server::connset::ConnSet;
 pub use server::server_conn::ServerConn;
 pub use server::acked_log::{AckedLog, LogEntry, InMemoryLog};
 
-use std::collections::{BTreeMap};
 use std::io::{Error, ErrorKind};
 use std::io;
 use std::net::SocketAddr;
 use std::ops::{Add, Sub};
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{self, Sender, Receiver};
+use std::sync::mpsc::{self, Sender, Receiver, SendError};
 use std::thread;
 use std::usize;
 
 use bytes::{alloc, Buf, ByteBuf, MutByteBuf, SliceBuf};
 use mio;
-use mio::{EventLoop, EventSet, PollOpt, Handler, Token, TryWrite, TryRead};
+use mio::{EventLoop, EventSet, PollOpt, Handler, NotifyError,
+          Token, TryWrite, TryRead};
 use mio::tcp::{TcpListener, TcpStream, TcpSocket};
 use mio::util::Slab;
 use rand::{Rng, thread_rng};
@@ -47,12 +48,28 @@ pub type Term = u64;
 pub type PeerID = String;
 
 pub struct Envelope {
-    address: Option<SocketAddr>,
+    pub address: Option<SocketAddr>,
     tok: Token,
     msg: ByteBuf,
 }
 
-#[derive(Debug, PartialEq)]
+pub trait SendChannel<M: Send, E> {
+    fn send_msg(&self, msg: M) -> E;
+}
+
+impl<M: Send> SendChannel<M, Result<(), NotifyError<M>>> for mio::Sender<M> {
+    fn send_msg(&self, msg: M) -> Result<(), NotifyError<M>> {
+        self.send(msg)
+    }
+}
+
+impl<M: Send> SendChannel<M, Result<(), SendError<M>>> for Sender<M> {
+    fn send_msg(&self, msg: M) -> Result<(), SendError<M>> {
+        self.send(msg)
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub struct Peer {
     addr: SocketAddr,
     sock: Option<Token>,
@@ -69,7 +86,7 @@ pub struct RepPeer {
 }
 
 #[derive(Debug, Clone)]
-enum State {
+pub enum State {
     Leader {
         term: Term,
         have: Vec<Token>,

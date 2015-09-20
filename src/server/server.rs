@@ -5,14 +5,12 @@ use std::process;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
 use std::thread;
-use std::usize;
 
 use bytes::{Buf, ByteBuf};
 use mio;
 use mio::{EventLoop, Token};
 use rand::{Rng, thread_rng};
 use rocksdb::{DB, Writable};
-use rocksdb::Options as RocksDBOptions;
 use protobuf;
 use protobuf::Message;
 use uuid::Uuid;
@@ -22,27 +20,28 @@ use ::{Clock, RealClock, CliReq, CliRes, GetReq, GetRes, PeerMsg,
     Append, AppendRes, Mutation, MutationType, Version, KV};
 use server::{Envelope, State, LEADER_DURATION, PEER_BROADCAST};
 use server::{RepPeer, AckedLog, InMemoryLog, LogEntry, TXID, Term, PeerID};
+use server::{SendChannel, rocksdb};
 use server::traffic_cop::TrafficCop;
 
-pub struct Server<C: Clock> {
-    clock: Arc<C>,
-    peer_port: u16,
-    cli_port: u16,
-    id: PeerID,
-    peers: Vec<String>,
-    rep_peers: BTreeMap<PeerID, RepPeer>,
-    rpc_tx: mio::Sender<Envelope>,
-    max_generated_txid: TXID,
-    highest_term: Term,
-    state: State,
-    db: DB,
+pub struct Server<C: Clock, RE> {
+    pub clock: Arc<C>,
+    pub peer_port: u16,
+    pub cli_port: u16,
+    pub id: PeerID,
+    pub peers: Vec<String>,
+    pub rep_peers: BTreeMap<PeerID, RepPeer>,
+    pub rpc_tx: Box<SendChannel<Envelope, RE> + Send>,
+    pub max_generated_txid: TXID,
+    pub highest_term: Term,
+    pub state: State,
+    pub db: DB,
     pub rep_log: Box<AckedLog<Mutation> + Send>,
-    pending: BTreeMap<TXID, (Envelope, u64)>,
+    pub pending: BTreeMap<TXID, (Envelope, u64)>,
 }
 
-unsafe impl<C: Clock> Sync for Server<C>{}
+unsafe impl<C: Clock, RE> Sync for Server<C, RE>{}
 
-impl<C: Clock> Server<C> {
+impl<C: Clock, RE> Server<C, RE> {
 
     pub fn run(
         peer_port: u16,
@@ -50,32 +49,7 @@ impl<C: Clock> Server<C> {
         storage_dir: String,
         peers: Vec<String>
     ) {
-        let mut opts = RocksDBOptions::new();
-        let memtable_budget = 1024;
-        opts.optimize_level_style_compaction(memtable_budget);
-        opts.create_if_missing(true);
-        let db = match DB::open_cf(&opts, &storage_dir,
-                                   &["storage", "local_meta"]) {
-            Ok(db) => db,
-            Err(_) => {
-                info!("Attempting to initialize data directory at {}",
-                      storage_dir);
-                match DB::open(&opts, &storage_dir) {
-                    Ok(mut db) => {
-                        db.create_cf(
-                            "storage", &RocksDBOptions::new()).unwrap();
-                        db.create_cf(
-                            "local_meta", &RocksDBOptions::new()).unwrap();
-                        db
-                    },
-                    Err(e) => {
-                        error!("failed to create database at {}", storage_dir);
-                        error!("{}", e);
-                        panic!(e);
-                    },
-                }
-            }
-        };
+        let db = rocksdb::new(storage_dir);
 
         // All long-running worker threads get a clone of this
         // Sender.  When they exit, they send over it.  If the
@@ -137,7 +111,7 @@ impl<C: Clock> Server<C> {
             peer_port: peer_port,
             cli_port: cli_port,
             id: Uuid::new_v4().to_string(), // TODO(tyler) read from rocksdb
-            rpc_tx: rpc_tx,
+            rpc_tx: Box::new(rpc_tx),
             max_generated_txid: 0, // TODO(tyler) read from rocksdb
             highest_term: 0, // TODO(tyler) read from rocksdb
             state: State::Init,
@@ -654,7 +628,7 @@ impl<C: Clock> Server<C> {
         ));
     }
 
-    fn cron(&mut self) {
+    pub fn cron(&mut self) {
         debug!("{} state: {:?}", self.id, self.state);
         // become candidate if we need to
         if !self.state.valid_leader(self.clock.now()) &&
@@ -718,7 +692,7 @@ impl<C: Clock> Server<C> {
     }
 
     fn reply(&mut self, req: Envelope, res_buf: ByteBuf) {
-        self.rpc_tx.send(Envelope {
+        self.rpc_tx.send_msg(Envelope {
             address: req.address,
             tok: req.tok,
             msg: res_buf,
@@ -726,7 +700,7 @@ impl<C: Clock> Server<C> {
     }
 
     fn peer_broadcast(&mut self, msg: ByteBuf) {
-        self.rpc_tx.send(Envelope {
+        self.rpc_tx.send_msg(Envelope {
             address: None,
             tok: PEER_BROADCAST,
             msg: msg,
@@ -769,7 +743,7 @@ impl<C: Clock> Server<C> {
                 peer_msg.set_srvid(self.id.clone());
                 peer_msg.set_append(append);
 
-                self.rpc_tx.send(Envelope {
+                self.rpc_tx.send_msg(Envelope {
                     address: peer.addr,
                     tok: peer.tok,
                     msg: ByteBuf::from_slice(

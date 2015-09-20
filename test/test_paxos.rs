@@ -1,9 +1,14 @@
 extern crate quickcheck;
 use rasputin::server::Server;
+use network::NetworkSim;
 
 #[test]
 fn test_leadership() {
-
+    let mut sim = NetworkSim::new(5);
+    for i in 0..10 {
+        println!("stepping");
+        sim.step();
+    }
 }
 
 #[test]
