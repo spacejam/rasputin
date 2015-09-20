@@ -1,5 +1,3 @@
-use std::io;
-use std::mem;
 use std::ops::Add;
 
 use bytes::{alloc, MutByteBuf, ByteBuf, Buf, MutBuf};
@@ -145,9 +143,8 @@ mod tests {
         let mut v: Vec<u8> = rng.gen_iter::<u8>().take(sz).collect();
         let mut c = codec::Framed::new();
         let mut bytes = ByteBuf::from_slice(&*v);
-        let mut encoded = codec::Framed::encode(bytes);
-        let decoded = c.decode(&mut encoded).unwrap();
-        decoded.bytes() == &*v
+        let mut encoded = c.encode(bytes);
+        c.decode(&mut encoded).len() == 1
     }
 
     #[test]

@@ -1,35 +1,31 @@
 use std::collections::{BTreeMap};
-use std::io::{Error, ErrorKind};
-use std::io;
 use std::net::SocketAddr;
-use std::ops::{Add, Sub};
+use std::ops::Add;
 use std::process;
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{self, Sender, Receiver};
+use std::sync::mpsc;
 use std::thread;
 use std::usize;
 
-use bytes::{alloc, Buf, ByteBuf, MutByteBuf, SliceBuf};
+use bytes::{Buf, ByteBuf};
 use mio;
-use mio::{EventLoop, EventSet, PollOpt, Handler, Token, TryWrite, TryRead};
-use mio::tcp::{TcpListener, TcpStream, TcpSocket};
-use mio::util::Slab;
+use mio::{EventLoop, Token};
 use rand::{Rng, thread_rng};
 use rocksdb::{DB, Writable};
 use rocksdb::Options as RocksDBOptions;
 use protobuf;
 use protobuf::Message;
-use time;
 use uuid::Uuid;
 
-use ::{CliReq, CliRes, GetReq, GetRes, PeerMsg,
+use ::{Clock, RealClock, CliReq, CliRes, GetReq, GetRes, PeerMsg,
     RedirectRes, SetReq, SetRes, VoteReq, VoteRes,
     Append, AppendRes, Mutation, MutationType, Version, KV};
-use server::{Envelope, State, LEADER_REFRESH, LEADER_DURATION, PEER_BROADCAST};
-use server::{RepPeer, AckedLog, LogEntry, TXID, Term, PeerID};
+use server::{Envelope, State, LEADER_DURATION, PEER_BROADCAST};
+use server::{RepPeer, AckedLog, InMemoryLog, LogEntry, TXID, Term, PeerID};
 use server::traffic_cop::TrafficCop;
 
-pub struct Server {
+pub struct Server<C: Clock> {
+    clock: Arc<C>,
     peer_port: u16,
     cli_port: u16,
     id: PeerID,
@@ -38,17 +34,15 @@ pub struct Server {
     rpc_tx: mio::Sender<Envelope>,
     max_generated_txid: TXID,
     highest_term: Term,
-    last_learned_term: Term,
-    last_learned_txid: TXID,
-    last_accepted_term: Term,
-    last_accepted_txid: TXID,
     state: State,
     db: DB,
-    rep_log: AckedLog<Mutation>,
+    pub rep_log: Box<AckedLog<Mutation> + Send>,
     pending: BTreeMap<TXID, (Envelope, u64)>,
 }
 
-impl Server {
+unsafe impl<C: Clock> Sync for Server<C>{}
+
+impl<C: Clock> Server<C> {
 
     pub fn run(
         peer_port: u16,
@@ -126,27 +120,29 @@ impl Server {
             tex1.send(());
         });
 
+        let mut rep_log = Box::new(InMemoryLog {
+            pending: BTreeMap::new(),
+            committed: BTreeMap::new(),
+            quorum: peers.len() / 2 + 1,
+            last_learned_txid: 0, // TODO(tyler) read from rocksdb
+            last_learned_term: 0, // TODO(tyler) read from rocksdb
+            last_accepted_txid: 0, // TODO(tyler) read from rocksdb
+            last_accepted_term: 0, // TODO(tyler) read from rocksdb
+        });
+
+        let clock = Arc::new(RealClock);
+
         let server = Arc::new(Mutex::new(Server {
+            clock: clock.clone(),
             peer_port: peer_port,
             cli_port: cli_port,
             id: Uuid::new_v4().to_string(), // TODO(tyler) read from rocksdb
             rpc_tx: rpc_tx,
             max_generated_txid: 0, // TODO(tyler) read from rocksdb
             highest_term: 0, // TODO(tyler) read from rocksdb
-            last_accepted_txid: 0, // TODO(tyler) read from rocksdb
-            last_accepted_term: 0, // TODO(tyler) read from rocksdb
-            last_learned_txid: 0, // TODO(tyler) read from rocksdb
-            last_learned_term: 0, // TODO(tyler) read from rocksdb
             state: State::Init,
             db: db,
-            rep_log: AckedLog {
-                pending: BTreeMap::new(),
-                committed: BTreeMap::new(),
-                quorum: peers.len() / 2 + 1,
-                last_learned_txid: 0, // TODO(tyler) read from rocksdb
-                last_accepted_txid: 0, // TODO(tyler) read from rocksdb
-                last_accepted_term: 0, // TODO(tyler) read from rocksdb
-            },
+            rep_log: rep_log,
             peers: peers,
             rep_peers: BTreeMap::new(),
             pending: BTreeMap::new(),
@@ -199,7 +195,7 @@ impl Server {
 
             let mut rng = thread_rng();
             loop {
-                thread::sleep_ms(rng.gen_range(400,500));
+                clock.sleep_ms(rng.gen_range(400,500));
                 match srv3.lock() {
                     Ok(mut srv) => srv.cron(),
                     Err(e) => {
@@ -232,9 +228,9 @@ impl Server {
         // set up a rep peer for this socket, and
         // reset possibly old ones
         match self.rep_peers.insert(peer_id.clone(), RepPeer{
-            max_sent_txid: self.last_accepted_txid,
-            last_accepted_txid: self.last_accepted_txid,
-            last_accepted_term: self.last_accepted_term,
+            max_sent_txid: self.rep_log.last_accepted_txid(),
+            last_accepted_txid: self.rep_log.last_accepted_txid(),
+            last_accepted_term: self.rep_log.last_accepted_term(),
             tok: tok,
             id: peer_id.clone(),
             addr: addr,
@@ -272,7 +268,8 @@ impl Server {
         // up on our own if we don't get a majority of unique votes
         // by the time our leader lease expires.  This protects us against
         // a single partially partitioned node from livelocking our cluster.
-        if self.state.valid_candidate() && !vote_res.get_success() {
+        if self.state.valid_candidate(self.clock.now()) &&
+            !vote_res.get_success() {
             // TODO(tyler) set term in rocksdb
             if vote_res.get_term() > self.highest_term {
                 self.highest_term = vote_res.get_term();
@@ -280,7 +277,7 @@ impl Server {
             self.state = State::Init;
             // reset replication peers
             self.rep_peers = BTreeMap::new();
-        } else if self.state.valid_candidate() {
+        } else if self.state.valid_candidate(self.clock.now()) {
             // we're currently a candidate, so see if we can ascend to
             // leader or if we need to give up
             self.state = match self.state.clone() {
@@ -323,7 +320,7 @@ impl Server {
 
         } else if self.state.is_leader() &&
             // see if we have a majority of peers, required for extension
-            self.state.valid_leader() &&
+            self.state.valid_leader(self.clock.now()) &&
             vote_res.get_success() {
 
             self.state = match self.state.clone() {
@@ -343,9 +340,7 @@ impl Server {
                     if new_have.len() >= need as usize {
                         debug!("{} leadership extended", self.id);
                         new_have = vec![];
-                        new_until = time::now()
-                            .to_timespec()
-                            .add(*LEADER_DURATION);
+                        new_until = self.clock.now().add(*LEADER_DURATION);
                     }
                     Some(State::Leader{
                         term: term,
@@ -361,9 +356,11 @@ impl Server {
         } else {
             // this can happen if a vote res is received by a follower
             error!("got vote response, but we can't handle it");
-            error!("valid leader: {}", self.state.valid_leader());
+            error!("valid leader: {}",
+                   self.state.valid_leader(self.clock.now()));
             error!("is leader: {}", self.state.is_leader());
-            error!("valid candidate: {}", self.state.valid_candidate());
+            error!("valid candidate: {}",
+                   self.state.valid_candidate(self.clock.now()));
             error!("is candidate: {}", self.state.is_candidate());
             error!("res term: {}", vote_res.get_term());
             error!("our term: {}", self.state.term().unwrap());
@@ -385,7 +382,7 @@ impl Server {
             // if we are this node (broadcast is naive) then all is well
             // reply to self but don't change to follower
             vote_res.set_success(true);
-        } else if self.state.valid_leader() &&
+        } else if self.state.valid_leader(self.clock.now()) &&
             !self.state.following(peer_id.clone()) {
             // if we're already following a different node, reject
 
@@ -408,26 +405,13 @@ impl Server {
                     term: term,
                     id: id.clone(),
                     leader_addr: leader_addr,
-                    until: time::now().to_timespec().add(*LEADER_DURATION),
+                    until: self.clock.now().add(*LEADER_DURATION),
                     tok: tok,
                 }),
                 _ => None,
             }.unwrap();
             vote_res.set_success(true);
-        } else if !self.state.valid_leader() &&
-            vote_req.get_term() >= self.last_learned_term &&
-            ((vote_req.get_last_accepted_txid() >= self.last_accepted_txid &&
-            vote_req.get_last_learned_term() == self.last_learned_term) ||
-            (vote_req.get_last_learned_term() > self.last_learned_term)) {
-            // accept this node as the leader if it has a higher term than
-            // we've ever seen and either one of the following conditions:
-            // 1. it has a higher previous max successful tx term
-            // 2. it has the same previous max successful tx term and at
-            //    least as many entries as we do for it.
-            //
-            // These conditions guarantee that we don't lose acked writes
-            // as long as a majority of our previous nodes stay alive.
-
+        } else if self.should_grant_vote(vote_req) {
             self.highest_term = vote_req.get_term();
             info!("new leader {}", peer_id);
             self.state = State::Follower {
@@ -435,7 +419,7 @@ impl Server {
                 term: vote_req.get_term(),
                 tok: env.tok,
                 leader_addr: env.address.unwrap(),
-                until: time::now().to_timespec().add(*LEADER_DURATION),
+                until: self.clock.now().add(*LEADER_DURATION),
             };
             info!("{:?}", self.state);
             vote_res.set_success(true);
@@ -472,11 +456,11 @@ impl Server {
         // verify that we are following this node
         if self.state.is_following(peer_id.clone()) {
             // verify that it links
-            if append.get_from_term() == self.last_accepted_term &&
-                append.get_from_txid() == self.last_accepted_txid {
+            if append.get_from_term() == self.rep_log.last_accepted_term() &&
+                append.get_from_txid() == self.rep_log.last_accepted_txid() {
 
-                let mut max_term = self.last_accepted_term;
-                let mut max_txid = self.last_accepted_txid;
+                let mut max_term = self.rep_log.last_accepted_term();
+                let mut max_txid = self.rep_log.last_accepted_txid();
                 for mutation in append.get_batch() {
                     let version = mutation.get_version();
                     if version.get_term() < max_term {
@@ -496,8 +480,6 @@ impl Server {
                     self.rep_log.append(version.get_term(),
                                         version.get_txid(),
                                         mutation.clone());
-                    self.last_accepted_term = version.get_term();
-                    self.last_accepted_txid = version.get_txid();
                 }
 
                 append_res.set_accepted(true);
@@ -516,8 +498,10 @@ impl Server {
                 warn!("failed to link msg from: {}", append.get_from_txid());
                 warn!("{:?}", self.state);
                 append_res.set_accepted(false);
-                append_res.set_last_accepted_term(self.last_accepted_term);
-                append_res.set_last_accepted_txid(self.last_accepted_txid);
+                append_res.set_last_accepted_term(
+                    self.rep_log.last_accepted_term());
+                append_res.set_last_accepted_txid(
+                    self.rep_log.last_accepted_txid());
             }
         }
 
@@ -560,7 +544,7 @@ impl Server {
                     peer_id
                 );
             },
-            None => (),
+            None => error!("got AppendRes for non-existent peer!"),
         }
         for (term, txid) in accepted {
             debug!("leader learning txid {}", txid);
@@ -639,7 +623,7 @@ impl Server {
                     get_res.set_err(
                         "Operational problem encountered".to_string());
                 });
-            get_res.set_txid(self.last_learned_txid);
+            get_res.set_txid(self.rep_log.last_learned_txid());
             res.set_get(get_res);
         } else if cli_req.has_set() {
             let txid = self.new_txid();
@@ -673,12 +657,13 @@ impl Server {
     fn cron(&mut self) {
         debug!("{} state: {:?}", self.id, self.state);
         // become candidate if we need to
-        if !self.state.valid_leader() && !self.state.valid_candidate() {
+        if !self.state.valid_leader(self.clock.now()) &&
+            !self.state.valid_candidate(self.clock.now()) {
             info!("{} transitioning to candidate state", self.id);
             self.highest_term += 1;
             self.state = State::Candidate {
                 term: self.highest_term,
-                until: time::now().to_timespec().add(*LEADER_DURATION),
+                until: self.clock.now().add(*LEADER_DURATION),
                 need: (self.peers.len() / 2 + 1) as u8,
                 have: vec![],
             };
@@ -686,18 +671,18 @@ impl Server {
         }
 
         // request or extend leadership
-        if self.state.should_extend_leadership() ||
-            self.state.valid_candidate() {
+        if self.state.should_extend_leadership(self.clock.now()) ||
+            self.state.valid_candidate(self.clock.now()) {
 
             debug!("broadcasting VoteReq");
             let mut req = PeerMsg::new();
             req.set_srvid(self.id.clone());
             let mut vote_req = VoteReq::new();
             vote_req.set_term(self.state.term().unwrap());
-            vote_req.set_last_accepted_term(self.last_accepted_term);
-            vote_req.set_last_accepted_txid(self.last_accepted_txid);
-            vote_req.set_last_learned_term(self.last_learned_term);
-            vote_req.set_last_learned_txid(self.last_learned_txid);
+            vote_req.set_last_accepted_term(self.rep_log.last_accepted_term());
+            vote_req.set_last_accepted_txid(self.rep_log.last_accepted_txid());
+            vote_req.set_last_learned_term(self.rep_log.last_learned_term());
+            vote_req.set_last_learned_txid(self.rep_log.last_learned_txid());
             req.set_vote_req(vote_req);
             self.peer_broadcast(
                 ByteBuf::from_slice(
@@ -714,7 +699,7 @@ impl Server {
 
             let mut kv = KV::new();
             kv.set_key(b"heartbeat".to_vec());
-            kv.set_value(format!("{}", time::now().to_timespec().sec)
+            kv.set_value(format!("{}", self.clock.now().sec)
                           .as_bytes()
                           .to_vec());
 
@@ -762,7 +747,7 @@ impl Server {
                 let mut append = Append::new();
                 append.set_from_txid(peer.last_accepted_txid);
                 append.set_from_term(peer.last_accepted_term);
-                append.set_last_learned_txid(self.last_learned_txid);
+                append.set_last_learned_txid(self.rep_log.last_learned_txid());
                 let mut batch = vec![];
                 for txid in
                     peer.max_sent_txid+1..peer.max_sent_txid + 100 {
@@ -795,17 +780,17 @@ impl Server {
         }
 
         let peer_ids: Vec<PeerID> = self.rep_peers.keys().cloned().collect();
-        debug!("rep log unaccepted len: {:?}", self.rep_log.pending.len());
+        debug!("rep log unaccepted len: {:?}",
+               self.rep_log.last_accepted_txid() -
+               self.rep_log.last_learned_txid());
         debug!("peers: {:?}", peer_ids);
     }
 
     fn learn(&mut self, term: Term, txid: TXID) {
-        self.last_learned_term = term;
-        self.last_learned_txid = txid;
-
         let mut set_res = SetRes::new();
 
         let mutation = self.rep_log.get(txid).unwrap();
+
         // TODO(tyler) handle different types of mutations
         let kv = mutation.get_kv();
         match self.db.put(kv.get_key(), kv.get_value()) {
@@ -833,6 +818,45 @@ impl Server {
                 ));
             },
             None => (),
+        }
+    }
+    
+    // These conditions guarantee that we don't lose acked writes
+    // as long as a majority of our previous nodes stay alive.
+    fn should_grant_vote(&self, vote_req: &VoteReq) -> bool {
+        if self.state.valid_leader(self.clock.now()) {
+            // we already have (or are) a valid leader
+            false
+        } else if vote_req.get_term() < self.rep_log.last_learned_term() {
+            // This refers to a stale term.  Note that we can still vote for
+            // vote requestors with lower terms than we've accepted but not 
+            // learned, because our acks may not have actually gained quorum.
+            // This is safe because any vote requestors that receives a quorum
+            // of votes will have anything that reached quorum in past rounds
+            // with the same members.
+            false
+        } else {
+            // at this point, we need to verify one of two conditions:
+            // 1. that the vote requestor has learned anything in a higher
+            //    term than we have
+            // 2. that the last term the vote requestor has learned something
+            //    is the same as ours, and the requestor has accepted at least
+            //    as many mutations within that term as we have
+            if vote_req.get_last_learned_term() >
+               self.rep_log.last_learned_term() {
+                // case 1
+                true
+            } else if vote_req.get_last_learned_term() ==
+                      self.rep_log.last_learned_term() &&
+                      vote_req.get_last_accepted_txid() >=
+                      self.rep_log.last_accepted_txid() {
+                // case 2
+                true
+            } else {
+                // at this point, we know that we have a log that is more
+                // recent than the vote requestor.
+                false
+            }
         }
     }
 }

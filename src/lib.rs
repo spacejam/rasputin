@@ -20,7 +20,14 @@ pub use codec::{
     Framed,
 };
 
+pub use clock::{
+    Clock,
+    RealClock,
+    TestClock,
+};
+
 pub mod codec;
+pub mod clock;
 pub mod server;
 pub mod serialization;
 pub mod logging;

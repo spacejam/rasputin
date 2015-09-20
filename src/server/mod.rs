@@ -3,15 +3,16 @@ mod server;
 mod connset;
 mod server_conn;
 mod traffic_cop;
+mod acked_log;
 
 pub use server::server::Server;
 pub use server::connset::ConnSet;
 pub use server::server_conn::ServerConn;
+pub use server::acked_log::{AckedLog, LogEntry, InMemoryLog};
 
 use std::collections::{BTreeMap};
 use std::io::{Error, ErrorKind};
 use std::io;
-use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::ops::{Add, Sub};
 use std::sync::{Arc, Mutex};
@@ -44,117 +45,6 @@ lazy_static! {
 pub type TXID = u64;
 pub type Term = u64;
 pub type PeerID = String;
-
-pub struct PendingReq<T> {
-    env: Envelope,
-    entry: T,
-}
-
-#[derive(Debug)]
-pub struct LogEntry<T> {
-    txid: TXID,
-    term: Term,
-    last_txid: TXID,
-    last_term: Term,
-    entry: T,
-}
-
-#[derive(Debug)]
-pub struct Acked<T> {
-    acks: Vec<PeerID>,
-    inner: T,
-}
-
-// Leaders and Followers have an AckedLog for handling replication.
-// Leaders have quorums of cluster_sz / 2 + 1, and Followers have
-// a quorum of 1 (need a single subsequent ack from leader)
-#[derive(Debug)]
-pub struct AckedLog<T> {
-    pending: BTreeMap<TXID, Acked<LogEntry<T>>>,
-    committed: BTreeMap<TXID, LogEntry<T>>,
-    quorum: usize,
-    last_learned_txid: TXID,
-    last_accepted_txid: TXID,
-    last_accepted_term: Term,
-}
-
-impl<T: Clone> AckedLog<T> {
-    pub fn append(&mut self, term: Term, txid: TXID, entry: T) {
-        self.pending.insert(txid, Acked{
-            acks: vec![],
-            inner: LogEntry {
-                txid: txid,
-                term: term,
-                last_txid: self.last_accepted_txid,
-                last_term: self.last_accepted_term,
-                entry: entry,
-            },
-        });
-        self.last_accepted_txid = txid;
-        self.last_accepted_term = term;
-    }
-
-    pub fn get(&self, txid: TXID) -> Option<T> {
-        self.pending.get(&txid)
-            .map(|al| al.inner.entry.clone())
-            .or(self.committed.get(&txid).map(|l| l.entry.clone()))
-    }
-
-    // Used by leaders to know when they've gotten enough acks.
-    // returns a set of txid's that have reached quorum
-    pub fn ack_up_to(&mut self, txid: TXID, peer: PeerID) -> Vec<(Term, TXID)> {
-        // append ack
-        for (txid, ent) in self.pending.iter_mut() {
-            if ent.inner.txid <= *txid {
-                if !ent.acks.contains(&peer) {
-                    ent.acks.push(peer)
-                }
-                break
-            }
-        }
-        let mut reached_quorum = vec![];
-        loop {
-            if self.pending.len() == 0 {
-                break;
-            }
-            let txid = self.pending.keys().cloned().next().unwrap();
-            if self.pending.get(&txid).unwrap().acks.len() < self.quorum {
-                break;
-            }
-            // TODO(tyler) work out persistence story so we don't lose
-            // logs during server crash between remove and push.
-            let ent = self.pending.remove(&txid).unwrap();
-            self.last_learned_txid = ent.inner.txid;
-            reached_quorum.push((ent.inner.term, ent.inner.txid));
-            self.committed.insert(txid, ent.inner);
-        }
-        reached_quorum
-    }
-
-    // Used by followers to commit where the leader told them they should
-    // be learning up to.
-    // returns the set of txids that have reached quorum
-    pub fn commit_up_to(&mut self, txid: TXID) -> Vec<(Term, TXID)> {
-        let mut reached_quorum = vec![];
-        loop {
-            if self.pending.len() == 0 {
-                break;
-            }
-            let next_txid = self.pending.keys().cloned().next().unwrap();
-            if next_txid > txid {
-                break;
-            }
-            let ent = self.pending.remove(&next_txid).unwrap();
-
-            // TODO(tyler) work out persistence story so we don't lose
-            // logs during server crash between remove and push.
-            self.last_learned_txid = ent.inner.txid;
-            reached_quorum.push((ent.inner.term, ent.inner.txid));
-            self.committed.insert(txid, ent.inner);
-        }
-        reached_quorum
-    }
-}
 
 pub struct Envelope {
     address: Option<SocketAddr>,
@@ -203,22 +93,22 @@ enum State {
 }
 
 impl State {
-    fn valid_leader(&self) -> bool {
+    fn valid_leader(&self, now: time::Timespec)  -> bool {
         match *self {
             State::Leader{until: until, ..} =>
-                time::now().to_timespec() < until,
+                now < until,
             State::Follower{
                 term:_, id:_, leader_addr: _, until: until, tok: _
             } =>
-                time::now().to_timespec() < until,
+                now < until,
             _ => false,
         }
     }
 
-    fn valid_candidate(&self) -> bool {
+    fn valid_candidate(&self, now: time::Timespec) -> bool {
         match *self {
             State::Candidate{until: until, ..} =>
-                time::now().to_timespec() < until,
+                now < until,
             _ => false,
         }
     }
@@ -255,10 +145,9 @@ impl State {
         }
     }
 
-    fn should_extend_leadership(&self) -> bool {
+    fn should_extend_leadership(&self, now: time::Timespec) -> bool {
         match *self {
             State::Leader{until: until, ..} => {
-                let now = time::now().to_timespec();
                 now.add(*LEADER_REFRESH) >= until && now < until
             },
             _ => false,

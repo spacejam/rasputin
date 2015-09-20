@@ -1,7 +1,6 @@
 use std::fs::{self, OpenOptions, File};
 use std::io::{Error, ErrorKind};
 use std::io::prelude::Write;
-use std::ops::Deref;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -22,7 +21,7 @@ impl log::Log for StdoutLogger {
         if self.enabled(record.metadata()) {
             println!("{} {} {}:{}] {}",
                      record.level(),
-                     time::now().to_timespec().sec,
+                     time::now().to_timespec().sec, // TODO(tyler) logical clock
                      record.location().file().split("/").last().unwrap(),
                      record.location().line(),
                      record.args());

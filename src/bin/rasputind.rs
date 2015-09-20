@@ -7,9 +7,9 @@ extern crate rasputin;
 
 use log::LogLevel;
 use docopt::Docopt;
-use mio::{EventLoop};
 
 use rasputin::server::Server;
+use rasputin::RealClock;
 
 static USAGE: &'static str = "
 rasputin - HA transactional store with a focus on usability, stability and performance.
@@ -59,7 +59,7 @@ fn main() {
         .filter(|s| s != "")
         .collect();
 
-    Server::run(peer_port, cli_port, storage_dir, seed_peers);
+    Server::<RealClock>::run(peer_port, cli_port, storage_dir, seed_peers);
 }
 
 #[derive(Debug, RustcDecodable)]
