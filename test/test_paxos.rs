@@ -5,8 +5,7 @@ use network::NetworkSim;
 #[test]
 fn test_leadership() {
     let mut sim = NetworkSim::new(5);
-    for i in 0..10 {
-        println!("stepping");
+    for i in 0..10000 {
         sim.step();
     }
 }

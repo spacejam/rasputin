@@ -1,11 +1,13 @@
-extern crate uuid;
+extern crate bytes;
 extern crate mio;
+extern crate uuid;
 
 use std::collections::BTreeMap;
 use std::net::{SocketAddr, SocketAddrV4, Ipv4Addr};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Sender, Receiver, SendError};
 
+use self::bytes::{Buf, ByteBuf};
 use self::mio::Token;
 use rasputin::server::{rocksdb, Server, Envelope, State, Peer, InMemoryLog,
                        LEADER_DURATION, PEER_BROADCAST};
@@ -26,6 +28,8 @@ struct SimServer {
     server: Server<TestClock, Result<(), SendError<Envelope>>>,
     clock: Arc<TestClock>,
     outbound: Receiver<Envelope>,
+    tok: Token,
+    addr: SocketAddr,
 }
 
 pub struct NetworkSim {
@@ -62,6 +66,7 @@ impl NetworkSim {
 
         let mut nodes: BTreeMap<Ipv4Addr, SimServer> = BTreeMap::new();
 
+        let mut toks = 0;
         for (peer, rep_log) in peers.iter().zip(logs) {
             let (tx, rx) = mpsc::channel();
             
@@ -87,9 +92,13 @@ impl NetworkSim {
 
             nodes.insert(*peer.ip(), SimServer {
                 server: server,
+                addr: SocketAddr::V4(SocketAddrV4::new(*peer.ip(), peer.port())),
                 clock: clock.clone(),
                 outbound: rx,
+                tok: Token(toks),
             });
+
+            toks += 1;
         }
 
         NetworkSim{
@@ -100,15 +109,39 @@ impl NetworkSim {
 
     pub fn step(&mut self) {
         let mut outbound = vec![];
-        for (_, node) in self.nodes.iter_mut() {
+        for (ip, node) in self.nodes.iter_mut() {
             node.server.cron();
             match node.outbound.try_recv() {
-                Ok(env) => outbound.push(env),
+                Ok(env) => outbound.push((node.addr, env)),
                 Err(_) => (), // nothing to send
             }
         }
-        for env in outbound {
-            // TODO(tyler) apply filters
+        for (addr, ref env) in outbound {
+            if env.address.is_none() {
+                // this is a peer broadcast, which will be attempted to be sent
+                // to all connected peers.
+                // TODO(tyler) apply filters and node selection randomization
+                for (_, node) in self.nodes.iter_mut() {
+                    node.server.handle_peer(Envelope {
+                        address: Some(addr),
+                        tok: node.tok,
+                        msg: ByteBuf::from_slice(env.msg.bytes()),
+                    });
+                }
+            } else {
+                // this is a targeted message
+                // TODO(tyler) apply filters and node selection randomization
+                for (_, node) in self.nodes.iter_mut() {
+                    if node.addr == env.address.unwrap() {
+                        println!("matched sender dest {:?}", node.addr);
+                        node.server.handle_peer(Envelope {
+                            address: Some(addr),
+                            tok: node.tok,
+                            msg: ByteBuf::from_slice(env.msg.bytes()),
+                        });
+                    }
+                }
+            }
             println!("env: {:?}", env.address);
         }
     }

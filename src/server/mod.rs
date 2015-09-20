@@ -49,8 +49,8 @@ pub type PeerID = String;
 
 pub struct Envelope {
     pub address: Option<SocketAddr>,
-    tok: Token,
-    msg: ByteBuf,
+    pub tok: Token,
+    pub msg: ByteBuf,
 }
 
 pub trait SendChannel<M: Send, E> {

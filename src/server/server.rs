@@ -526,7 +526,7 @@ impl<C: Clock, RE> Server<C, RE> {
         }
     }
 
-    fn handle_peer(&mut self, env: Envelope) {
+    pub fn handle_peer(&mut self, env: Envelope) {
         let peer_msg: PeerMsg =
             protobuf::parse_from_bytes(env.msg.bytes()).unwrap();
         let peer_id = peer_msg.get_srvid();
