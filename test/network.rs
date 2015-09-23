@@ -1,4 +1,5 @@
 extern crate bytes;
+extern crate rand;
 extern crate mio;
 extern crate uuid;
 
@@ -7,11 +8,12 @@ use std::net::{SocketAddr, SocketAddrV4, Ipv4Addr};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Sender, Receiver, SendError};
 
+use self::rand::{Rng, thread_rng};
 use self::bytes::{Buf, ByteBuf};
 use self::mio::Token;
 use rasputin::server::{rocksdb, Server, Envelope, State, Peer, InMemoryLog,
                        LEADER_DURATION, PEER_BROADCAST};
-use rasputin::{TestClock, Mutation};
+use rasputin::{Clock, TestClock, Mutation};
 use self::uuid::Uuid;
 
 // NetworkSim facilitates testing a cluster against network failures.
@@ -108,12 +110,16 @@ impl NetworkSim {
     }
 
     pub fn step(&mut self) {
+        let mut rng = thread_rng();
         let mut outbound = vec![];
         for (ip, node) in self.nodes.iter_mut() {
+            node.clock.sleep_ms(rng.gen_range(400,500));
             node.server.cron();
-            match node.outbound.try_recv() {
-                Ok(env) => outbound.push((node.addr, env)),
-                Err(_) => (), // nothing to send
+            loop {
+                match node.outbound.try_recv() {
+                    Ok(env) => outbound.push((node.addr, env)),
+                    Err(_) => break, // nothing to send
+                }
             }
         }
         for (addr, ref env) in outbound {

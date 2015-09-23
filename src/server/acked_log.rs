@@ -1,4 +1,5 @@
 pub use server::{TXID, Term, PeerID};
+use std::fmt;
 
 use std::collections::BTreeMap;
 
@@ -17,6 +18,16 @@ pub trait AckedLog<T> {
 pub trait ViewableLog {
     fn acked(&self) -> Vec<(Term,TXID)>;
     fn learned(&self) -> Vec<(Term,TXID)>;
+}
+
+impl<T> fmt::Debug for AckedLog<T> + Send {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "(lt: {} lx: {} at: {} ax: {})",
+               self.last_learned_term(),
+               self.last_learned_txid(),
+               self.last_accepted_term(),
+               self.last_accepted_txid())
+    }
 }
 
 #[derive(Debug)]

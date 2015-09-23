@@ -45,7 +45,12 @@ impl Clock for TestClock {
 
     fn sleep_ms(&self, ms: u32) {
         let mut inner = self.inner.write().unwrap();
-        inner.sec += (ms / (1e9 as u32)) as i64;
-        inner.nsec += (ms % (1e9 as u32)) as i32;
+        let ns = (ms % 1e6 as u32) * 1e6 as u32;
+        info!("adding {} nanoseconds to clock", ns);
+        inner.nsec += ns as i32;
+        if inner.nsec > 1e9 as i32 {
+            inner.sec += (inner.nsec / 1e9 as i32) as i64;
+            inner.nsec = (inner.nsec % 1e9 as i32) as i32;
+        }
     }
 }
