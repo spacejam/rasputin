@@ -228,7 +228,7 @@ impl<C: Clock, RE> Server<C, RE> {
         peer_id: PeerID,
         vote_res: &VoteRes
     ) {
-        debug!("got response for vote request");
+        debug!("{} got response for vote request from {}", self.id, env.address.unwrap());
         let term = self.state.term();
 
         if term.is_none() || vote_res.get_term() != term.unwrap() {
@@ -285,7 +285,7 @@ impl<C: Clock, RE> Server<C, RE> {
                         info!("{:?}", state);
                         Some(state)
                     } else {
-                        debug!("5");
+                        debug!("need more votes, have {} need {}", new_have.len(), need);
                         // we still need more votes
                         Some(State::Candidate{
                             term: term,

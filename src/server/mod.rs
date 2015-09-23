@@ -53,6 +53,16 @@ pub struct Envelope {
     pub msg: ByteBuf,
 }
 
+impl Clone for Envelope {
+    fn clone(&self) -> Self {
+        Envelope {
+            address: self.address,
+            tok: self.tok,
+            msg: ByteBuf::from_slice(self.msg.bytes()),
+        }
+    }
+}
+
 pub trait SendChannel<M: Send, E> {
     fn send_msg(&self, msg: M) -> E;
 }

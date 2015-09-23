@@ -26,6 +26,11 @@ enum NetworkCondition {
     Partition(SocketAddr, SocketAddr)
 }
 
+enum Event {
+    Cron { node: u16 },
+    Receive { to: SocketAddr, env: Envelope },
+}
+
 struct SimServer {
     server: Server<TestClock, Result<(), SendError<Envelope>>>,
     clock: Arc<TestClock>,
@@ -36,7 +41,9 @@ struct SimServer {
 
 pub struct NetworkSim {
     rng: StdRng,
-    nodes: BTreeMap<Ipv4Addr, SimServer>,
+    clock: u64, // elapsed time in ms
+    events: BTreeMap<u64, Vec<Event>>, // times to events
+    nodes: BTreeMap<u16, SimServer>,
     filters: Vec<NetworkCondition>,
 }
 
@@ -67,7 +74,7 @@ impl NetworkSim {
             peer_strings.push(format!("{}:{}", ip, port));
         }
 
-        let mut nodes: BTreeMap<Ipv4Addr, SimServer> = BTreeMap::new();
+        let mut nodes = BTreeMap::new();
 
         let mut toks = 0;
         for (peer, rep_log) in peers.iter().zip(logs) {
@@ -93,7 +100,7 @@ impl NetworkSim {
                 pending: BTreeMap::new(),
             };
 
-            nodes.insert(*peer.ip(), SimServer {
+            nodes.insert(peer.port(), SimServer {
                 server: server,
                 addr: SocketAddr::V4(SocketAddrV4::new(*peer.ip(), peer.port())),
                 clock: clock.clone(),
@@ -105,18 +112,97 @@ impl NetworkSim {
         }
 
         let seed: &[_] = &[0];
-        NetworkSim{
+        let mut ns = NetworkSim{
             rng: SeedableRng::from_seed(seed),
+            clock: 0,
+            events: BTreeMap::new(),
             nodes: nodes,
             filters: vec![],
+        };
+
+        // fire up the servers by queuing their cron
+        for i in 0..ns.nodes.len() {
+            let time = ns.rng.gen_range(400,500);
+            ns.push_event(
+                time,
+                Event::Cron{ node: i as u16 }
+            );
+        }
+        ns
+    }
+
+    pub fn pause_node(&mut self, node: u16) -> Result<(), ()> {
+        // TODO
+        Err(())
+    }
+
+    pub fn unpause_node(&mut self, node: u16) -> Result<(), ()> {
+        // TODO
+        Err(())
+    }
+
+    pub fn partition_nodes(&mut self, node1: u16, node2: u16) -> Result<(), ()> {
+        // TODO
+        Err(())
+    }
+
+    pub fn unpartition_nodes(&mut self, node1: u16, node2: u16) -> Result<(), ()> {
+        // TODO
+        Err(())
+    }
+
+    pub fn advance_time(&mut self, ms: u64) {
+        for (_, node) in self.nodes.iter_mut() {
+            node.clock.sleep_ms(ms as u32);
         }
     }
 
+    fn push_event(&mut self, time: u64, event: Event) {
+        match self.events.get_mut(&time) {
+            Some(event_vec) => {
+                event_vec.push(event);
+                return;
+            },
+            None => (),
+        };
+        self.events.insert(time, vec![event]);
+    }
+
+    fn pop_event(&mut self) -> (u64, Option<Vec<Event>>) {
+        let next_key = self.events.keys().next().unwrap().clone();
+        (next_key, self.events.remove(&next_key))
+    }
+
+    // step works in two phases:
+    // 1. handle queued events
+    // 2. queue rpc's generated in response to those events
     pub fn step(&mut self) {
+        let (time, events) = self.pop_event();
+        // move everyone's clocks forward
+        let before = self.clock.clone();
+        self.advance_time(time - before);
+
+        // Perform event
+        for event in events.unwrap() {
+            match event {
+                Event::Cron{node:node} => {
+                    self.nodes.get_mut(&node).unwrap().server.cron();
+                    let time = self.rng.gen_range(400,500);
+                    self.push_event(
+                        time,
+                        Event::Cron{ node: node }
+                    );
+                },
+                Event::Receive{to:to, env:env} => {
+                    let node = self.nodes.get_mut(&to.port()).unwrap();
+                    node.server.handle_peer(env);
+                },
+            }
+        }
+
+        // Queue up any outbound messages
         let mut outbound = vec![];
         for (ip, node) in self.nodes.iter_mut() {
-            node.clock.sleep_ms(self.rng.gen_range(400,500));
-            node.server.cron();
             loop {
                 match node.outbound.try_recv() {
                     Ok(env) => outbound.push((node.addr, env)),
@@ -124,33 +210,38 @@ impl NetworkSim {
                 }
             }
         }
-        for (addr, ref env) in outbound {
+        // TODO(tyler) apply filters and node selection randomization
+        for (addr, env) in outbound {
+            println!("env: {:?}", env.address);
+            let env_with_return_address = Envelope {
+                address: Some(addr),
+                tok: Token(addr.port() as usize),
+                msg: ByteBuf::from_slice(env.msg.bytes()),
+            };
             if env.address.is_none() {
                 // this is a peer broadcast, which will be attempted to be sent
                 // to all connected peers.
-                // TODO(tyler) apply filters and node selection randomization
-                for (_, node) in self.nodes.iter_mut() {
-                    node.server.handle_peer(Envelope {
-                        address: Some(addr),
-                        tok: node.tok,
-                        msg: ByteBuf::from_slice(env.msg.bytes()),
+                let ports = self.nodes.len();
+                for port in 0..ports {
+                    let arrival = self.clock + 1;
+                    self.push_event(arrival, Event::Receive {
+                        to: u16_to_socketaddr(port as u16),
+                        env: env_with_return_address.clone(),
                     });
                 }
             } else {
-                // this is a targeted message
-                // TODO(tyler) apply filters and node selection randomization
-                for (_, node) in self.nodes.iter_mut() {
-                    if node.addr == env.address.unwrap() {
-                        println!("matched sender dest {:?}", node.addr);
-                        node.server.handle_peer(Envelope {
-                            address: Some(addr),
-                            tok: node.tok,
-                            msg: ByteBuf::from_slice(env.msg.bytes()),
-                        });
-                    }
-                }
+                let arrival = self.clock + 1;
+                self.push_event(arrival, Event::Receive {
+                    to: u16_to_socketaddr(env.tok.as_usize() as u16),
+                    env: env_with_return_address,
+                });
             }
-            println!("env: {:?}", env.address);
         }
     }
 }
+
+fn u16_to_socketaddr(from: u16) -> SocketAddr {
+    let ip = Ipv4Addr::new(1, 0, (from / 256) as u8, (from % 256) as u8);
+    SocketAddr::V4(SocketAddrV4::new(ip, from))
+}
+
