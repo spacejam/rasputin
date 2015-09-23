@@ -8,7 +8,7 @@ use std::net::{SocketAddr, SocketAddrV4, Ipv4Addr};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Sender, Receiver, SendError};
 
-use self::rand::{Rng, thread_rng};
+use self::rand::{StdRng, SeedableRng, Rng};
 use self::bytes::{Buf, ByteBuf};
 use self::mio::Token;
 use rasputin::server::{rocksdb, Server, Envelope, State, Peer, InMemoryLog,
@@ -35,6 +35,7 @@ struct SimServer {
 }
 
 pub struct NetworkSim {
+    rng: StdRng,
     nodes: BTreeMap<Ipv4Addr, SimServer>,
     filters: Vec<NetworkCondition>,
 }
@@ -103,17 +104,18 @@ impl NetworkSim {
             toks += 1;
         }
 
+        let seed: &[_] = &[0];
         NetworkSim{
+            rng: SeedableRng::from_seed(seed),
             nodes: nodes,
             filters: vec![],
         }
     }
 
     pub fn step(&mut self) {
-        let mut rng = thread_rng();
         let mut outbound = vec![];
         for (ip, node) in self.nodes.iter_mut() {
-            node.clock.sleep_ms(rng.gen_range(400,500));
+            node.clock.sleep_ms(self.rng.gen_range(400,500));
             node.server.cron();
             loop {
                 match node.outbound.try_recv() {
