@@ -255,7 +255,6 @@ impl<C: Clock, RE> Server<C, RE> {
         } else if self.state.valid_candidate(self.clock.now()) {
             // we're currently a candidate, so see if we can ascend to
             // leader or if we need to give up
-            debug!("1");
             self.state = match self.state.clone() {
                 State::Candidate{
                     term: term,
@@ -263,16 +262,13 @@ impl<C: Clock, RE> Server<C, RE> {
                     need: need,
                     have: ref have,
                 } => {
-                    debug!("2");
                     let mut new_have = have.clone();
                     if !new_have.contains(&env.tok) &&
                         vote_res.get_term() == term {
                         new_have.push(env.tok);
-                        debug!("3");
                         self.update_rep_peers(peer_id, env.address, env.tok);
                     }
                     if new_have.len() >= need as usize {
-                        debug!("4");
                         // we've ascended to leader!
                         info!("{} transitioning to leader state", self.id);
                         new_have = vec![];
@@ -762,6 +758,9 @@ impl<C: Clock, RE> Server<C, RE> {
         }
 
         let peer_ids: Vec<PeerID> = self.rep_peers.keys().cloned().collect();
+        debug!("accepted: {} learned: {}",
+               self.rep_log.last_accepted_txid(),
+               self.rep_log.last_learned_txid());
         debug!("rep log unaccepted len: {:?}",
                self.rep_log.last_accepted_txid() -
                self.rep_log.last_learned_txid());

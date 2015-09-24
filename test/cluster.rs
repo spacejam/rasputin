@@ -16,7 +16,7 @@ use rasputin::server::{rocksdb, Server, Envelope, State, Peer, InMemoryLog,
 use rasputin::{Clock, TestClock, Mutation};
 use self::uuid::Uuid;
 
-// NetworkSim facilitates testing a cluster against network failures.
+// SimCluster facilitates testing a cluster against network failures.
 // This is accomplished by dropping messages, delaying messages, and randomizing
 // which surviving ready messages are chosen in which order (but surviving
 // messages between the same two nodes preserve ordering, because we use a
@@ -39,7 +39,7 @@ struct SimServer {
     addr: SocketAddr,
 }
 
-pub struct NetworkSim {
+pub struct SimCluster {
     rng: StdRng,
     clock: u64, // elapsed time in ms
     events: BTreeMap<u64, Vec<Event>>, // times to events
@@ -47,8 +47,8 @@ pub struct NetworkSim {
     filters: Vec<NetworkCondition>,
 }
 
-impl NetworkSim {
-    pub fn new(num_nodes: u16) -> NetworkSim {
+impl SimCluster {
+    pub fn new(num_nodes: u16) -> SimCluster {
         let mut logs = vec![];
         for i in 0..num_nodes as usize {
             logs.push(InMemoryLog {
@@ -61,10 +61,10 @@ impl NetworkSim {
                 last_accepted_term: 0,
             });
         }
-        NetworkSim::new_from_logs(logs)
+        SimCluster::new_from_logs(logs)
     }
 
-    pub fn new_from_logs(logs: Vec<InMemoryLog<Mutation>>) -> NetworkSim {
+    pub fn new_from_logs(logs: Vec<InMemoryLog<Mutation>>) -> SimCluster {
         let mut peers = vec![];
         let mut peer_strings = vec![];
         for i in 0..logs.len() {
@@ -112,7 +112,7 @@ impl NetworkSim {
         }
 
         let seed: &[_] = &[0];
-        let mut ns = NetworkSim{
+        let mut ns = SimCluster{
             rng: SeedableRng::from_seed(seed),
             clock: 0,
             events: BTreeMap::new(),
@@ -212,7 +212,6 @@ impl NetworkSim {
         }
         // TODO(tyler) apply filters and node selection randomization
         for (addr, env) in outbound {
-            println!("env: {:?}", env.address);
             let env_with_return_address = Envelope {
                 address: Some(addr),
                 tok: Token(addr.port() as usize),

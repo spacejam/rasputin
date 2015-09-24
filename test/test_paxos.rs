@@ -3,14 +3,14 @@ extern crate quickcheck;
 
 use rasputin::server::Server;
 use rasputin::logging;
-use network::NetworkSim;
+use cluster::SimCluster;
 use self::log::LogLevel;
 
 #[test]
 fn test_leadership() {
     logging::init_logger(None, LogLevel::Debug).unwrap();
-    let mut sim = NetworkSim::new(5);
-    for i in 0..200 {
+    let mut sim = SimCluster::new(5);
+    for i in 0..3 {
         sim.step();
     }
 }
