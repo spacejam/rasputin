@@ -63,6 +63,8 @@ unsafe impl<T> Sync for InMemoryLog<T>{}
 
 impl<T: Clone> AckedLog<T> for InMemoryLog<T> {
     fn append(&mut self, term: Term, txid: TXID, entry: T) {
+        //TODO verify txid > last accepted
+        assert!(txid > self.last_accepted_txid);
         self.pending.insert(txid, Acked{
             acks: vec![],
             inner: LogEntry {

@@ -31,11 +31,11 @@ enum Event {
     Receive { to: SocketAddr, env: Envelope },
 }
 
-struct SimServer {
-    server: Server<TestClock, Result<(), SendError<Envelope>>>,
+pub struct SimServer {
+    pub server: Server<TestClock, Result<(), SendError<Envelope>>>,
     clock: Arc<TestClock>,
     outbound: Receiver<Envelope>,
-    tok: Token,
+    pub tok: Token,
     addr: SocketAddr,
 }
 
@@ -43,7 +43,7 @@ pub struct SimCluster {
     rng: StdRng,
     clock: u64, // elapsed time in ms
     events: BTreeMap<u64, Vec<Event>>, // times to events
-    nodes: BTreeMap<u16, SimServer>,
+    pub nodes: BTreeMap<u16, SimServer>,
     filters: Vec<NetworkCondition>,
 }
 

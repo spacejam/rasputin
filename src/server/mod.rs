@@ -139,7 +139,7 @@ impl State {
         }
     }
 
-    fn is_leader(&self) -> bool {
+    pub fn is_leader(&self) -> bool {
         match *self {
             State::Leader{..} =>
                 true,
@@ -211,7 +211,7 @@ impl State {
         }
     }
 
-    fn term(&self) -> Option<Term> {
+    pub fn term(&self) -> Option<Term> {
         match *self {
             State::Leader{term: term, ..} =>
                 Some(term),

@@ -1,3 +1,4 @@
+use std::cmp;
 use std::collections::{BTreeMap};
 use std::net::SocketAddr;
 use std::ops::Add;
@@ -461,11 +462,15 @@ impl<C: Clock, RE> Server<C, RE> {
                 append_res.set_last_accepted_term(max_term);
                 append_res.set_last_accepted_txid(max_txid);
 
+                // Bump up generator for future use if we transition to leader.
+                self.max_generated_txid = max_txid;
+
                 for (term, txid) in
                     self.rep_log.commit_up_to(append.get_last_learned_txid()) {
 
                     debug!("follower learning term {} txid {}", term, txid);
                     self.learn(term, txid);
+                    debug!("learned");
                 }
             } else {
                 // this update doesn't link to our last entry, so tell the
@@ -690,6 +695,7 @@ impl<C: Clock, RE> Server<C, RE> {
 
     fn new_txid(&mut self) -> TXID {
         self.max_generated_txid += 1;
+        info!("generating txid {}, {:?}", self.max_generated_txid, self.rep_log);
         self.max_generated_txid
     }
 
@@ -770,7 +776,15 @@ impl<C: Clock, RE> Server<C, RE> {
     fn learn(&mut self, term: Term, txid: TXID) {
         let mut set_res = SetRes::new();
 
-        let mutation = self.rep_log.get(txid).unwrap();
+        debug!("trying to get txid {} in rep log", txid);
+        let mutation = match self.rep_log.get(txid) {
+            Some(m) => m,
+            None => {
+                debug!("we don't have this tx in our log yet");
+                return
+            },
+        };
+        debug!("got txid {} from rep log", txid);
 
         // TODO(tyler) handle different types of mutations
         let kv = mutation.get_kv();
