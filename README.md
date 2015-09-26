@@ -1,6 +1,6 @@
 # Rasputin DB :globe_with_meridians:
 
-flexible causally-consistent distributed store
+flexible linearizable distributed store
 
 ![RasputinDB](/doc/kmiyc.png)
 
