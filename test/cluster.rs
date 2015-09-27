@@ -4,6 +4,7 @@ extern crate mio;
 extern crate uuid;
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::net::{SocketAddr, SocketAddrV4, Ipv4Addr};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Sender, Receiver, SendError};
@@ -11,7 +12,8 @@ use std::sync::mpsc::{self, Sender, Receiver, SendError};
 use self::rand::{StdRng, SeedableRng, Rng};
 use self::bytes::{Buf, ByteBuf};
 use self::mio::Token;
-use rasputin::server::{rocksdb, Server, Envelope, State, Peer, InMemoryLog,
+use rasputin::server::rocksdb as db;
+use rasputin::server::{Server, Envelope, State, Peer, InMemoryLog,
                        LEADER_DURATION, PEER_BROADCAST};
 use rasputin::{Clock, TestClock, Mutation};
 use self::uuid::Uuid;
@@ -32,6 +34,7 @@ enum Event {
 }
 
 pub struct SimServer {
+    path: String,
     pub server: Server<TestClock, Result<(), SendError<Envelope>>>,
     clock: Arc<TestClock>,
     outbound: Receiver<Envelope>,
@@ -48,7 +51,7 @@ pub struct SimCluster {
 }
 
 impl SimCluster {
-    pub fn new(num_nodes: u16) -> SimCluster {
+    pub fn new(dir: &str, num_nodes: u16) -> SimCluster {
         let mut logs = vec![];
         for i in 0..num_nodes as usize {
             logs.push(InMemoryLog {
@@ -61,10 +64,10 @@ impl SimCluster {
                 last_accepted_term: 0,
             });
         }
-        SimCluster::new_from_logs(logs)
+        SimCluster::new_from_logs(dir, logs)
     }
 
-    pub fn new_from_logs(logs: Vec<InMemoryLog<Mutation>>) -> SimCluster {
+    pub fn new_from_logs(dir: &str, logs: Vec<InMemoryLog<Mutation>>) -> SimCluster {
         let mut peers = vec![];
         let mut peer_strings = vec![];
         for i in 0..logs.len() {
@@ -82,6 +85,8 @@ impl SimCluster {
             
             let clock = Arc::new(TestClock::new());
 
+            let state_dir = format!("_rasputin_test/{}/sim_{}",
+                                    dir, peer.port());
             let server = Server {
                 clock: clock.clone(),
                 peer_port: peer.port(),
@@ -91,9 +96,7 @@ impl SimCluster {
                 max_generated_txid: 0,
                 highest_term: 0,
                 state: State::Init,
-                db: rocksdb::new(
-                    format!("_rasputin_test/sim_{}", peer.port())
-                ),
+                db: db::new(state_dir.clone()),
                 rep_log: Box::new(rep_log),
                 peers: peer_strings.clone(),
                 rep_peers: BTreeMap::new(),
@@ -101,6 +104,7 @@ impl SimCluster {
             };
 
             nodes.insert(peer.port(), SimServer {
+                path: state_dir.to_string(),
                 server: server,
                 addr: SocketAddr::V4(SocketAddrV4::new(*peer.ip(), peer.port())),
                 clock: clock.clone(),
@@ -152,6 +156,7 @@ impl SimCluster {
     }
 
     pub fn advance_time(&mut self, ms: u64) {
+        self.clock += ms;
         for (_, node) in self.nodes.iter_mut() {
             node.clock.sleep_ms(ms as u32);
         }
@@ -181,6 +186,7 @@ impl SimCluster {
         // move everyone's clocks forward
         let before = self.clock.clone();
         self.advance_time(time - before);
+        let after = self.clock.clone();
 
         // Perform event
         for event in events.unwrap() {
@@ -189,7 +195,7 @@ impl SimCluster {
                     self.nodes.get_mut(&node).unwrap().server.cron();
                     let time = self.rng.gen_range(400,500);
                     self.push_event(
-                        time,
+                        after + time,
                         Event::Cron{ node: node }
                     );
                 },
@@ -239,8 +245,15 @@ impl SimCluster {
     }
 }
 
+impl Drop for SimServer {
+    fn drop(&mut self) {
+        // TODO(tyler) implement this in rocksdb lib
+        // self.server.db.delete();
+        fs::remove_dir_all(&self.path);
+    }
+}
+
 fn u16_to_socketaddr(from: u16) -> SocketAddr {
     let ip = Ipv4Addr::new(1, 0, (from / 256) as u8, (from % 256) as u8);
     SocketAddr::V4(SocketAddrV4::new(ip, from))
 }
-

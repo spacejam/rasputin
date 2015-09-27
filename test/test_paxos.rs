@@ -25,18 +25,44 @@ use self::log::LogLevel;
 
 #[test]
 fn election_safety() {
-    logging::init_logger(None, LogLevel::Debug).unwrap();
-    let mut sim = SimCluster::new(5);
+    //logging::init_logger(None, LogLevel::Debug).unwrap();
+    let mut sim = SimCluster::new("safety", 5);
     let mut leaders = BTreeMap::new();
     for i in 0..300 {
         sim.step();
-        sim.nodes.values()
-                 .filter(|n| n.server.state.is_leader())
-                 .map(|n| {
-                     let term = n.server.state.term().unwrap();
-                     let tok = n.tok.as_usize();
-                     assert!(*leaders.entry(term).or_insert(tok) == tok);
-                 });
+        for (id, n) in sim.nodes.iter() {
+            if n.server.state.is_leader() {
+                let term = n.server.state.term().unwrap();
+                let tok = n.tok.as_usize();
+                assert!(*leaders.entry(term).or_insert(tok) == tok);
+            }
+        }
+    }
+}
+
+#[test]
+fn stable_leader_with_no_faults() {
+    let mut sim = SimCluster::new("stable", 5);
+    let mut leader = None;
+    for i in 0..300 {
+        sim.step();
+        for (id, n) in sim.nodes.iter() {
+             match n.server.state.term() {
+                 Some(term) => {
+                     if leader.is_none() && n.server.state.is_leader() {
+                         leader = Some(term);
+                     } else if n.server.state.is_leader() {
+                         assert!(leader.unwrap() == term);
+                     }
+                 },
+                 None => {
+                     // If there's no term, make sure leader was not previously
+                     // elected.
+                     assert!(leader.is_none());
+                 },
+
+             }
+        }
     }
 }
 
