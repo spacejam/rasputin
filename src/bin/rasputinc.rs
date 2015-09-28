@@ -4,11 +4,7 @@ extern crate docopt;
 extern crate log;
 extern crate rasputin;
 
-use std::sync::{Arc, RwLock};
-
 use docopt::Docopt;
-
-const MS_PER_SEC: u32 = 1000;
 
 static USAGE: &'static str = "
 ftctl - client for rasputin.

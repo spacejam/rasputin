@@ -1,25 +1,15 @@
 use std::io::{Error, ErrorKind};
 use std::io;
-use std::net::SocketAddr;
-use std::ops::{Add, Sub};
-use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{self, Sender, Receiver};
-use std::thread;
-use std::usize;
+use std::sync::mpsc::Sender;
 
-use bytes::{alloc, Buf, ByteBuf, MutByteBuf, SliceBuf};
-use mio;
+use bytes::{alloc, Buf, ByteBuf};
 use mio::{EventLoop, EventSet, PollOpt, Handler, Token, TryWrite, TryRead};
-use mio::tcp::{TcpListener, TcpStream, TcpSocket};
+use mio::tcp::{TcpListener, TcpSocket};
 use mio::util::Slab;
 use rand::{Rng, thread_rng};
-use protobuf;
-use protobuf::Message;
-use time;
 
 use server::*;
 use codec;
-use codec::Codec;
 
 pub struct TrafficCop {
     peers: Vec<Peer>,
