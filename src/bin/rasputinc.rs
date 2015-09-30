@@ -1,19 +1,22 @@
 extern crate rustc_serialize;
 extern crate docopt;
-#[macro_use]
-extern crate log;
+#[macro_use] extern crate log;
 extern crate rasputin;
 
+use std::net::SocketAddr;
+use std::process;
+
+use rasputin::Client;
 use docopt::Docopt;
 
 static USAGE: &'static str = "
-ftctl - client for rasputin.
+rasputinc - client for rasputin.
 
 This program is the Rasputin DB command line client.
 
 Usage:
     rasputinc --help
-    rasputinc [--peers=<peers>] [--get=<key>] [--set=<key>,<value>] [--cas=<key>,<oldvalue>,<value>]
+    rasputinc [--peers=<peers>] [--get=<key>] [--set=<key>,<value>] [--cas=<key>,<oldvalue>,<value>] [--del=<key>]
 
 Options:
     --help                          Show this help message.
@@ -22,6 +25,7 @@ Options:
     --get=<key>                     Get the current value for <key>, if set.
     --set=<key,value>               Set the key <key> to <value>.
     --cas=<key,oldvalue,value>      Attempt an atomic compare and swap.
+    --del=<key>                     Delete the current value for <key>, if set.
 ";
 
 fn main() {
@@ -29,11 +33,22 @@ fn main() {
         .and_then(|d| d.decode())
         .unwrap_or_else(|e| e.exit());
 
-    let peers: Vec<String> = args.flag_peers.unwrap_or("localhost:7777".to_string())
+    let peers: Vec<SocketAddr> = args.flag_peers.unwrap_or("127.0.0.1:7777".to_string())
         .split(",")
-        .map(|s| s.to_string())
-        .filter(|s| s != "")
+        .map(|s| s.parse().unwrap())
         .collect();
+
+    let mut cli = Client::new(peers, 1);
+
+    args.flag_set.map(|kv: String| {
+        let kvs: Vec<&str> = kv.splitn(2, ",").take(2).collect();
+        if kvs.len() != 2 {
+            println!("{}", USAGE);
+            process::exit(1);
+        }
+        let (k, v) = (kvs[0], kvs[1]);
+        cli.set(k.as_bytes(), v.as_bytes()).unwrap();
+    });
 }
 
 #[derive(Debug, RustcDecodable)]
@@ -43,4 +58,5 @@ struct Args {
     flag_set: Option<String>,
     flag_get: Option<String>,
     flag_cas: Option<String>,
+    flag_del: Option<String>,
 }

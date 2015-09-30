@@ -26,11 +26,21 @@ pub use clock::{
     TestClock,
 };
 
-pub mod codec;
+pub use range_bounds::{
+    RangeBounds,
+};
+
+pub use client::{
+    Client,
+};
+
+pub mod client;
 pub mod clock;
-pub mod server;
-pub mod serialization;
+pub mod codec;
 pub mod logging;
+pub mod range_bounds;
+pub mod serialization;
+pub mod server;
 
 extern crate bytes;
 #[macro_use] extern crate log;
@@ -41,3 +51,4 @@ extern crate rand;
 extern crate rocksdb;
 extern crate time;
 extern crate uuid;
+extern crate threadpool;
