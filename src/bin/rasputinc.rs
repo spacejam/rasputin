@@ -21,7 +21,7 @@ Usage:
 Options:
     --help                          Show this help message.
     --peers=<host1:port1,...>       List of comma-delimited peers, e.g:
-                                    foo.baz.com:7777,bar.baz.com:7777
+                                    foo.baz.com:8888,bar.baz.com:8888
     --get=<key>                     Get the current value for <key>, if set.
     --set=<key,value>               Set the key <key> to <value>.
     --cas=<key,oldvalue,value>      Attempt an atomic compare and swap.
@@ -33,7 +33,7 @@ fn main() {
         .and_then(|d| d.decode())
         .unwrap_or_else(|e| e.exit());
 
-    let peers: Vec<SocketAddr> = args.flag_peers.unwrap_or("127.0.0.1:7777".to_string())
+    let peers: Vec<SocketAddr> = args.flag_peers.unwrap_or("127.0.0.1:8888".to_string())
         .split(",")
         .map(|s| s.parse().unwrap())
         .collect();

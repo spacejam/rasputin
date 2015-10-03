@@ -555,7 +555,7 @@ impl<C: Clock, RE> Server<C, RE> {
     }
 
     fn handle_cli(&mut self, req: Envelope) {
-        debug!("got cli request!");
+        info!("got cli request!");
         let cli_req: CliReq =
             protobuf::parse_from_bytes(req.msg.bytes()).unwrap();
         let mut res = CliRes::new();
