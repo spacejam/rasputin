@@ -2,7 +2,7 @@ use std::io;
 use std::sync::mpsc::Sender;
 
 use bytes::{Buf, ByteBuf};
-use mio::{EventLoop, EventSet, PollOpt, Token, TryWrite, TryRead};
+use mio::{EventLoop, EventSet, PollOpt, Token, TryRead, TryWrite};
 use mio::tcp::TcpStream;
 
 use codec::{self, Codec};
@@ -16,7 +16,7 @@ pub struct ServerConn {
     pub res_remaining: usize,
     pub req_codec: codec::Framed,
     pub token: Option<Token>,
-    pub interest: EventSet
+    pub interest: EventSet,
 }
 
 impl ServerConn {
@@ -28,14 +28,13 @@ impl ServerConn {
             res_bufs: vec![],
             res_remaining: 0,
             token: None,
-            interest: EventSet::hup()
+            interest: EventSet::hup(),
         }
     }
 
-    pub fn writable(
-        &mut self,
-        event_loop: &mut EventLoop<TrafficCop>
-    ) -> io::Result<()> {
+    pub fn writable(&mut self,
+                    event_loop: &mut EventLoop<TrafficCop>)
+                    -> io::Result<()> {
         if self.res_bufs.len() == 0 {
             // no responses yet, don't reregister
             return Ok(())
@@ -62,15 +61,13 @@ impl ServerConn {
                 match e.raw_os_error() {
                     Some(32) => {
                         info!("client disconnected");
-                    },
-                    Some(e) =>
-                        info!("not implemented; client os err={:?}", e),
-                    _ =>
-                        info!("not implemented; client err={:?}", e),
+                    }
+                    Some(e) => info!("not implemented; client os err={:?}", e),
+                    _ => info!("not implemented; client err={:?}", e),
                 };
                 // Don't reregister.
                 return Err(e);
-            },
+            }
         }
 
         // push res back if it's not finished
@@ -78,18 +75,15 @@ impl ServerConn {
             self.res_bufs.insert(0, res_buf);
         }
 
-        event_loop.reregister(
-            &self.sock,
-            self.token.unwrap(),
-            self.interest,
-            PollOpt::edge() | PollOpt::oneshot(),
-        )
+        event_loop.reregister(&self.sock,
+                              self.token.unwrap(),
+                              self.interest,
+                              PollOpt::edge() | PollOpt::oneshot())
     }
 
-    pub fn readable(
-        &mut self,
-        event_loop: &mut EventLoop<TrafficCop>
-    ) -> io::Result<()> {
+    pub fn readable(&mut self,
+                    event_loop: &mut EventLoop<TrafficCop>)
+                    -> io::Result<()> {
 
         // TODO(tyler) get rid of this double copying and read
         // directly to codec
@@ -117,12 +111,9 @@ impl ServerConn {
             });
         }
 
-        event_loop.reregister(
-            &self.sock,
-            self.token.unwrap(),
-            self.interest,
-            PollOpt::edge() | PollOpt::oneshot(),
-        )
+        event_loop.reregister(&self.sock,
+                              self.token.unwrap(),
+                              self.interest,
+                              PollOpt::edge() | PollOpt::oneshot())
     }
 }
-

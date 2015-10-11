@@ -23,17 +23,12 @@ impl Clock for RealClock {
 }
 
 pub struct TestClock {
-    inner: RwLock<time::Timespec>
+    inner: RwLock<time::Timespec>,
 }
 
 impl TestClock {
     pub fn new() -> TestClock {
-        TestClock {
-            inner: RwLock::new(time::Timespec{
-                sec: 0,
-                nsec: 0,
-            })
-        }
+        TestClock { inner: RwLock::new(time::Timespec { sec: 0, nsec: 0 }) }
     }
 }
 

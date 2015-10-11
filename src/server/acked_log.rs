@@ -1,4 +1,4 @@
-pub use server::{TXID, Term, PeerID};
+pub use server::{PeerID, TXID, Term};
 use std::fmt;
 
 use std::collections::BTreeMap;
@@ -16,13 +16,14 @@ pub trait AckedLog<T> {
 
 // This should be used for testing and debugging only.
 pub trait ViewableLog {
-    fn acked(&self) -> Vec<(Term,TXID)>;
-    fn learned(&self) -> Vec<(Term,TXID)>;
+    fn acked(&self) -> Vec<(Term, TXID)>;
+    fn learned(&self) -> Vec<(Term, TXID)>;
 }
 
 impl<T> fmt::Debug for AckedLog<T> + Send {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "(lt: {} lx: {} at: {} ax: {})",
+        write!(f,
+               "(lt: {} lx: {} at: {} ax: {})",
                self.last_learned_term(),
                self.last_learned_txid(),
                self.last_accepted_term(),
@@ -65,22 +66,24 @@ impl<T: Clone> AckedLog<T> for InMemoryLog<T> {
     fn append(&mut self, term: Term, txid: TXID, entry: T) {
         //TODO verify txid > last accepted
         assert!(txid > self.last_accepted_txid);
-        self.pending.insert(txid, Acked{
-            acks: vec![],
-            inner: LogEntry {
-                txid: txid,
-                term: term,
-                last_txid: self.last_accepted_txid,
-                last_term: self.last_accepted_term,
-                entry: entry,
-            },
-        });
+        self.pending.insert(txid,
+                            Acked {
+                                acks: vec![],
+                                inner: LogEntry {
+                                    txid: txid,
+                                    term: term,
+                                    last_txid: self.last_accepted_txid,
+                                    last_term: self.last_accepted_term,
+                                    entry: entry,
+                                },
+                            });
         self.last_accepted_txid = txid;
         self.last_accepted_term = term;
     }
 
     fn get(&self, txid: TXID) -> Option<T> {
-        self.pending.get(&txid)
+        self.pending
+            .get(&txid)
             .map(|al| al.inner.entry.clone())
             .or(self.committed.get(&txid).map(|l| l.entry.clone()))
     }
@@ -160,7 +163,7 @@ impl<T: Clone> AckedLog<T> for InMemoryLog<T> {
 }
 
 impl<T: Clone> ViewableLog for InMemoryLog<Acked<LogEntry<T>>> {
-    fn acked(&self) -> Vec<(Term,TXID)> {
+    fn acked(&self) -> Vec<(Term, TXID)> {
         let mut ret = vec![];
         for (txid, acked) in self.pending.iter() {
             ret.push((acked.inner.term, *txid));
@@ -168,7 +171,7 @@ impl<T: Clone> ViewableLog for InMemoryLog<Acked<LogEntry<T>>> {
         ret
     }
 
-    fn learned(&self) -> Vec<(Term,TXID)> {
+    fn learned(&self) -> Vec<(Term, TXID)> {
         let mut ret = vec![];
         for (txid, learned) in self.committed.iter() {
             ret.push((learned.term, *txid));

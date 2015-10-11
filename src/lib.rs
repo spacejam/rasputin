@@ -1,38 +1,18 @@
 #![crate_id = "rasputin"]
 #![crate_type = "lib"]
 
-pub use serialization::{
-    Mutation, MutationType,
-    Version, KV,
-    SetReq, SetRes,
-    GetReq, GetRes,
-    CASReq, CASRes,
-    WatchReq, WatchRes,
-    RedirectRes,
-    CliReq, CliRes,
-    VoteReq, VoteRes,
-    Append, AppendRes,
-    PeerMsg,
-};
+pub use serialization::{Append, AppendRes, CASReq, CASRes, CliReq, CliRes,
+                        GetReq, GetRes, KV, Mutation, MutationType, PeerMsg,
+                        RedirectRes, SetReq, SetRes, Version, VoteReq, VoteRes,
+                        WatchReq, WatchRes};
 
-pub use codec::{
-    Codec,
-    Framed,
-};
+pub use codec::{Codec, Framed};
 
-pub use clock::{
-    Clock,
-    RealClock,
-    TestClock,
-};
+pub use clock::{Clock, RealClock, TestClock};
 
-pub use range_bounds::{
-    RangeBounds,
-};
+pub use range_bounds::RangeBounds;
 
-pub use client::{
-    Client,
-};
+pub use client::Client;
 
 pub mod client;
 pub mod clock;
@@ -43,8 +23,10 @@ pub mod serialization;
 pub mod server;
 
 extern crate bytes;
-#[macro_use] extern crate log;
-#[macro_use] extern crate lazy_static;
+#[macro_use]
+extern crate log;
+#[macro_use]
+extern crate lazy_static;
 extern crate mio;
 extern crate protobuf;
 extern crate rand;

@@ -19,10 +19,9 @@ pub struct ConnSet {
 }
 
 impl ConnSet {
-    pub fn accept(
-        &mut self,
-        event_loop: &mut EventLoop<TrafficCop>,
-    ) -> io::Result<()> {
+    pub fn accept(&mut self,
+                  event_loop: &mut EventLoop<TrafficCop>)
+                  -> io::Result<()> {
 
         debug!("ConnSet accepting socket");
 
@@ -30,41 +29,41 @@ impl ConnSet {
         self.register(sock.unwrap(), event_loop).map(|_| ())
     }
 
-    pub fn register(
-        &mut self,
-        sock: TcpStream,
-        event_loop: &mut EventLoop<TrafficCop>,
-    ) -> io::Result<Token> {
+    pub fn register(&mut self,
+                    sock: TcpStream,
+                    event_loop: &mut EventLoop<TrafficCop>)
+                    -> io::Result<Token> {
 
         let conn = ServerConn::new(sock, self.req_tx.clone());
 
         // Re-register accepting socket
-        event_loop.reregister(
-            &self.srv_sock,
-            self.srv_token,
-            EventSet::readable(),
-            PollOpt::edge() | PollOpt::oneshot(),
-        );
+        event_loop.reregister(&self.srv_sock,
+                              self.srv_token,
+                              EventSet::readable(),
+                              PollOpt::edge() | PollOpt::oneshot());
 
-        self.conns.insert(conn).map(|tok| {
+        self.conns
+            .insert(conn)
+            .map(|tok| {
             // Register the connection
-            self.conns[tok].token = Some(tok);
-            event_loop.register_opt(
-                &self.conns[tok].sock,
-                tok,
-                EventSet::readable(),
-                PollOpt::edge() | PollOpt::oneshot()
-            ).ok().expect("could not register socket with event loop");
-            tok
-        }).or_else(|e| Err(Error::new(ErrorKind::Other,
-                                      "All connection slots full.")))
+                self.conns[tok].token = Some(tok);
+                event_loop.register_opt(&self.conns[tok].sock,
+                                        tok,
+                                        EventSet::readable(),
+                                        PollOpt::edge() | PollOpt::oneshot())
+                          .ok()
+                          .expect("could not register socket with event loop");
+                tok
+            })
+            .or_else(|e| {
+                Err(Error::new(ErrorKind::Other, "All connection slots full."))
+            })
     }
 
-    pub fn conn_readable(
-        &mut self,
-        event_loop: &mut EventLoop<TrafficCop>,
-        tok: Token,
-    ) -> io::Result<()> {
+    pub fn conn_readable(&mut self,
+                         event_loop: &mut EventLoop<TrafficCop>,
+                         tok: Token)
+                         -> io::Result<()> {
 
         debug!("ConnSet conn readable; tok={:?}", tok);
         if !self.conns.contains(tok) {
@@ -75,11 +74,10 @@ impl ConnSet {
         self.conn(tok).readable(event_loop)
     }
 
-    pub fn conn_writable(
-        &mut self,
-        event_loop: &mut EventLoop<TrafficCop>,
-        tok: Token,
-    ) -> io::Result<()> {
+    pub fn conn_writable(&mut self,
+                         event_loop: &mut EventLoop<TrafficCop>,
+                         tok: Token)
+                         -> io::Result<()> {
         if !self.conns.contains(tok) {
             debug!("got conn_writable for non-existent token!");
             return Ok(());
@@ -90,7 +88,7 @@ impl ConnSet {
             Err(e) => {
                 debug!("got err in ConnSet conn_writable: {}", e);
                 Err(e)
-            },
+            }
             w => w,
         }
     }
