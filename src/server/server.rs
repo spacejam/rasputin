@@ -830,39 +830,39 @@ impl<C: Clock, RE> Server<C, RE> {
                 let mut cas_res = CASRes::new();
                 match self.db.get(mutation.get_key()) {
                     DBResult::Some(old_val) => {
-                        if mutation.has_old_val() &&
-                            old_val == mutation.get_old_val() {
+                        if mutation.has_old_value() &&
+                            *old_val == *mutation.get_old_value() {
 
                             // compare succeeded, let's try to set
                             match self.db.put(mutation.get_key(), mutation.get_value()) {
                                 Ok(_) => {
                                     cas_res.set_success(true);
-                                    cas_res.set_value(mutation.get_value());
+                                    cas_res.set_value(mutation.get_value().to_vec());
                                 },
                                 Err(e) => {
                                     error!("Operational problem encountered: {}", e);
                                     cas_res.set_success(false);
                                     cas_res.set_err("Operational problem encountered".to_string());
-                                    cas_res.set_value(old_val);
+                                    cas_res.set_value(old_val.to_vec());
                                 }
                             }
                         } else {
                             cas_res.set_success(false);
                             cas_res.set_err("compare failure".to_string());
-                            cas_res.set_value(old_val);
+                            cas_res.set_value(old_val.to_vec());
                         }
                     },
                     DBResult::None => {
-                        if !mutation.has_old_val() {
+                        if !mutation.has_old_value() {
                             match self.db.put(mutation.get_key(), mutation.get_value()) {
                                 Ok(_) => {
                                     cas_res.set_success(true);
-                                    cas_res.set_value(mutation.get_value());
+                                    cas_res.set_value(mutation.get_value().to_vec());
                                 },
                                 Err(e) => {
                                     error!("Operational problem encountered: {}", e);
                                     cas_res.set_success(false);
-                                    cas_res.set_err("Operational problem encountered".to_string());
+                                    cas_res.set_err(format!("Operational problem encountered: {}", e));
                                 }
                             }
                         } else {
@@ -870,23 +870,31 @@ impl<C: Clock, RE> Server<C, RE> {
                             cas_res.set_err("compare failure".to_string());
                         }
                     },
-                    DBResult::Err(e) => {
+                    DBResult::Error(e) => {
                         cas_res.set_success(false);
                         error!("Operational problem encountered: {}", e);
-                        cas_res.set_err("Operational problem encountered: {}", e);
+                        cas_res.set_err(format!("Operational problem encountered: {}", e));
                     },
                 }
                 cas_res.set_txid(self.rep_log.last_learned_txid());
                 res.set_cas(cas_res);
-
             },
             MutationType::KVDEL => {
+                let mut del_res = DelRes::new();
+                // If the value exists, return it.
+                match self.db.get(mutation.get_key()) {
+                    DBResult::Some(old_val) => {
+                        del_res.set_value(old_val.to_vec());
+                    }
+                    DBResult::None => (), // we don't care
+                    DBResult::Error(e) => (), // we don't care, but we probably should
+                }
                 match self.db.delete(mutation.get_key()) {
-                    Ok(_) => set_res.set_success(true),
+                    Ok(_) => del_res.set_success(true),
                     Err(e) => {
                         error!("Operational problem encountered: {}", e);
-                        set_res.set_success(false);
-                        set_res.set_err("Operational problem encountered".to_string());
+                        del_res.set_success(false);
+                        del_res.set_err(format!("Operational problem encountered: {}", e));
                     }
                 }
             },
