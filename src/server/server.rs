@@ -11,14 +11,14 @@ use bytes::{Buf, ByteBuf};
 use mio;
 use mio::{EventLoop, Token};
 use rand::{Rng, thread_rng};
-use rocksdb::{DB, Writable};
+use rocksdb::{DB, DBResult, Writable};
 use protobuf;
 use protobuf::Message;
 use uuid::Uuid;
 
-use {Append, AppendRes, CliReq, CliRes, Clock, GetReq, GetRes, KV, Mutation,
+use {Append, AppendRes, CliReq, CliRes, Clock, GetReq, GetRes, Mutation,
      MutationType, PeerMsg, RealClock, RedirectRes, SetReq, SetRes, Version,
-     VoteReq, VoteRes};
+     CASReq, CASRes, DelReq, DelRes, VoteReq, VoteRes};
 use server::{Envelope, LEADER_DURATION, PEER_BROADCAST, State};
 use server::{AckedLog, InMemoryLog, LogEntry, PeerID, RepPeer, TXID, Term};
 use server::{SendChannel, rocksdb};
@@ -65,12 +65,13 @@ impl<C: Clock, RE> Server<C, RE> {
         let (peer_req_tx, peer_req_rx) = mpsc::channel();
         let (cli_req_tx, cli_req_rx) = mpsc::channel();
 
-        let mut tc = TrafficCop::new(peer_port,
-                                     cli_port,
-                                     peers.clone(),
-                                     peer_req_tx,
-                                     cli_req_tx)
-                         .unwrap();
+        let mut tc = TrafficCop::new(
+            peer_port,
+            cli_port,
+            peers.clone(),
+            peer_req_tx,
+            cli_req_tx
+        ).unwrap();
 
         // A single MIO EventLoop handles our IO
         let mut event_loop = EventLoop::new().unwrap();
@@ -99,7 +100,7 @@ impl<C: Clock, RE> Server<C, RE> {
             last_learned_txid: 0, // TODO(tyler) read from rocksdb
             last_learned_term: 0, // TODO(tyler) read from rocksdb
             last_accepted_txid: 0, // TODO(tyler) read from rocksdb
-            last_accepted_term: 0, /* TODO(tyler) read from rocksdb */
+            last_accepted_term: 0, // TODO(tyler) read from rocksdb
         });
 
         let clock = Arc::new(RealClock);
@@ -608,14 +609,49 @@ impl<C: Clock, RE> Server<C, RE> {
             version.set_txid(txid);
             version.set_term(self.state.term().unwrap());
 
-            let mut kv = KV::new();
-            kv.set_key(set_req.get_key().to_vec());
-            kv.set_value(set_req.get_value().to_vec());
-
             let mut mutation = Mutation::new();
             mutation.set_field_type(MutationType::KVSET);
             mutation.set_version(version);
-            mutation.set_kv(kv);
+            mutation.set_key(set_req.get_key().to_vec());
+            mutation.set_value(set_req.get_value().to_vec());
+
+            self.replicate(vec![mutation.clone()]);
+            self.pending.insert(txid, (req, cli_req.get_req_id()));
+            // send a response later after this txid is learned
+            return;
+        } else if cli_req.has_cas() {
+            let txid = self.new_txid();
+            let cas_req = cli_req.get_cas();
+
+            // replicate the mutation
+            let mut version = Version::new();
+            version.set_txid(txid);
+            version.set_term(self.state.term().unwrap());
+
+            let mut mutation = Mutation::new();
+            mutation.set_field_type(MutationType::KVCAS);
+            mutation.set_version(version);
+            mutation.set_key(cas_req.get_key().to_vec());
+            mutation.set_value(cas_req.get_new_value().to_vec());
+            mutation.set_old_value(cas_req.get_old_value().to_vec());
+
+            self.replicate(vec![mutation.clone()]);
+            self.pending.insert(txid, (req, cli_req.get_req_id()));
+            // send a response later after this txid is learned
+            return;
+        } else if cli_req.has_del() {
+            let txid = self.new_txid();
+            let del_req = cli_req.get_del();
+
+            // replicate the mutation
+            let mut version = Version::new();
+            version.set_txid(txid);
+            version.set_term(self.state.term().unwrap());
+
+            let mut mutation = Mutation::new();
+            mutation.set_field_type(MutationType::KVDEL);
+            mutation.set_version(version);
+            mutation.set_key(del_req.get_key().to_vec());
 
             self.replicate(vec![mutation.clone()]);
             self.pending.insert(txid, (req, cli_req.get_req_id()));
@@ -667,16 +703,14 @@ impl<C: Clock, RE> Server<C, RE> {
             version.set_txid(self.new_txid());
             version.set_term(self.state.term().unwrap());
 
-            let mut kv = KV::new();
-            kv.set_key(b"heartbeat".to_vec());
-            kv.set_value(format!("{}", self.clock.now().sec)
-                             .as_bytes()
-                             .to_vec());
-
             let mut mutation = Mutation::new();
             mutation.set_field_type(MutationType::KVSET);
             mutation.set_version(version);
-            mutation.set_kv(kv);
+            mutation.set_key(b"heartbeat".to_vec());
+            mutation.set_value(format!("{}", self.clock.now().sec)
+                             .as_bytes()
+                             .to_vec());
+
 
             self.replicate(vec![mutation]);
         }
@@ -766,7 +800,6 @@ impl<C: Clock, RE> Server<C, RE> {
     }
 
     fn learn(&mut self, term: Term, txid: TXID) {
-        let mut set_res = SetRes::new();
 
         debug!("trying to get txid {} in rep log", txid);
         let mutation = match self.rep_log.get(txid) {
@@ -778,15 +811,85 @@ impl<C: Clock, RE> Server<C, RE> {
         };
         debug!("got txid {} from rep log", txid);
 
-        // TODO(tyler) handle different types of mutations
-        let kv = mutation.get_kv();
-        match self.db.put(kv.get_key(), kv.get_value()) {
-            Ok(_) => set_res.set_success(true),
-            Err(e) => {
-                error!("Operational problem encountered: {}", e);
-                set_res.set_success(false);
-                set_res.set_err("Operational problem encountered".to_string());
-            }
+        let mut res = CliRes::new();
+
+        match mutation.get_field_type() {
+            MutationType::KVSET => {
+                let mut set_res = SetRes::new();
+                match self.db.put(mutation.get_key(), mutation.get_value()) {
+                    Ok(_) => set_res.set_success(true),
+                    Err(e) => {
+                        error!("Operational problem encountered: {}", e);
+                        set_res.set_success(false);
+                        set_res.set_err("Operational problem encountered".to_string());
+                    }
+                }
+                res.set_set(set_res);
+            },
+            MutationType::KVCAS => {
+                let mut cas_res = CASRes::new();
+                match self.db.get(mutation.get_key()) {
+                    DBResult::Some(old_val) => {
+                        if mutation.has_old_val() &&
+                            old_val == mutation.get_old_val() {
+
+                            // compare succeeded, let's try to set
+                            match self.db.put(mutation.get_key(), mutation.get_value()) {
+                                Ok(_) => {
+                                    cas_res.set_success(true);
+                                    cas_res.set_value(mutation.get_value());
+                                },
+                                Err(e) => {
+                                    error!("Operational problem encountered: {}", e);
+                                    cas_res.set_success(false);
+                                    cas_res.set_err("Operational problem encountered".to_string());
+                                    cas_res.set_value(old_val);
+                                }
+                            }
+                        } else {
+                            cas_res.set_success(false);
+                            cas_res.set_err("compare failure".to_string());
+                            cas_res.set_value(old_val);
+                        }
+                    },
+                    DBResult::None => {
+                        if !mutation.has_old_val() {
+                            match self.db.put(mutation.get_key(), mutation.get_value()) {
+                                Ok(_) => {
+                                    cas_res.set_success(true);
+                                    cas_res.set_value(mutation.get_value());
+                                },
+                                Err(e) => {
+                                    error!("Operational problem encountered: {}", e);
+                                    cas_res.set_success(false);
+                                    cas_res.set_err("Operational problem encountered".to_string());
+                                }
+                            }
+                        } else {
+                            cas_res.set_success(false);
+                            cas_res.set_err("compare failure".to_string());
+                        }
+                    },
+                    DBResult::Err(e) => {
+                        cas_res.set_success(false);
+                        error!("Operational problem encountered: {}", e);
+                        cas_res.set_err("Operational problem encountered: {}", e);
+                    },
+                }
+                cas_res.set_txid(self.rep_log.last_learned_txid());
+                res.set_cas(cas_res);
+
+            },
+            MutationType::KVDEL => {
+                match self.db.delete(mutation.get_key()) {
+                    Ok(_) => set_res.set_success(true),
+                    Err(e) => {
+                        error!("Operational problem encountered: {}", e);
+                        set_res.set_success(false);
+                        set_res.set_err("Operational problem encountered".to_string());
+                    }
+                }
+            },
         }
 
         // TODO(tyler) use persisted crash-proof logic
@@ -795,9 +898,7 @@ impl<C: Clock, RE> Server<C, RE> {
             Some((env, req_id)) => {
                 // If there's a pending client request associated with this,
                 // then send them a response.
-                let mut res = CliRes::new();
                 res.set_req_id(req_id);
-                res.set_set(set_res);
                 self.reply(env,
                            ByteBuf::from_slice(&*res.write_to_bytes()
                                                     .unwrap()));

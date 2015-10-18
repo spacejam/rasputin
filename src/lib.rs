@@ -2,9 +2,9 @@
 #![crate_type = "lib"]
 
 pub use serialization::{Append, AppendRes, CASReq, CASRes, CliReq, CliRes,
-                        GetReq, GetRes, KV, Mutation, MutationType, PeerMsg,
+                        GetReq, GetRes, Mutation, MutationType, PeerMsg,
                         RedirectRes, SetReq, SetRes, Version, VoteReq, VoteRes,
-                        WatchReq, WatchRes};
+                        WatchReq, WatchRes, DelReq, DelRes};
 
 pub use codec::{Codec, Framed};
 

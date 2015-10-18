@@ -23,25 +23,37 @@ message GetReq {
 message GetRes {
   required bool success = 1;
   required uint64 txid = 2;
-  required bytes value = 3;
+  optional bytes value = 3;
   optional string err = 4;
 }
 
 message CASReq {
   required bytes key = 1;
-  required bytes value = 2;
-  required bytes oldvalue = 3;
+  optional bytes new_value = 2;
+  optional bytes old_value = 3;
 }
 
 message CASRes {
   required bool success = 1;
   required uint64 txid = 2;
-  optional string err = 3;
+  optional bytes value = 3;
+  optional string err = 4;
+}
+
+message DelReq {
+  required bytes key = 1;
+}
+
+message DelRes {
+  required bool success = 1;
+  required uint64 txid = 2;
+  required bytes value = 3;
+  optional string err = 4;
 }
 
 message WatchReq {
   required bytes key = 1;
-  required uint64 lasttxid = 2;
+  required uint64 last_txid = 2;
   required bool recursive = 3;
   required bool historical = 4;
 }
@@ -68,17 +80,14 @@ enum MutationType {
 message Mutation {
   required MutationType type = 1;
   required Version version = 2;
-  optional KV kv = 3;
+  required bytes key = 3;
+  optional bytes value = 4;
+  optional bytes old_value = 5;
 }
 
 message Version {
   required uint64 txid = 1;
   required uint64 term = 2;
-}
-
-message KV {
-  required bytes key = 1;
-  optional bytes value = 2;
 }
 
 // client top-levl API
@@ -87,7 +96,8 @@ message CliReq {
   optional GetReq get = 2;
   optional SetReq set = 3;
   optional CASReq cas = 4;
-  optional WatchReq watch = 5;
+  optional DelReq del = 5;
+  optional WatchReq watch = 6;
 }
 
 message CliRes {
@@ -95,8 +105,9 @@ message CliRes {
   optional GetRes get = 2;
   optional SetRes set = 3;
   optional CASRes cas = 4;
-  optional WatchRes watch = 5;
-  optional RedirectRes redirect = 6;
+  optional DelRes del = 5;
+  optional WatchRes watch = 6;
+  optional RedirectRes redirect = 7;
 }
 
 //

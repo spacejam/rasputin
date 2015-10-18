@@ -9,8 +9,8 @@ use protobuf::{self, Message};
 use mio::{TryRead, TryWrite};
 use mio::tcp::TcpStream;
 
-use {CliReq, CliRes, GetReq, GetRes, KV, RangeBounds, RedirectRes, SetReq,
-     SetRes, Version};
+use {CliReq, CliRes, GetReq, GetRes, RangeBounds, RedirectRes, SetReq,
+     SetRes, Version, CASReq, CASRes, DelReq, DelRes};
 use codec::{self, Codec, Framed};
 
 pub struct Client {
@@ -35,10 +35,12 @@ impl Client {
         self.req_counter
     }
 
-    pub fn set<'a>(&mut self,
-                   key: &'a [u8],
-                   value: &'a [u8])
-                   -> io::Result<SetRes> {
+    pub fn set<'a>(
+        &mut self,
+        key: &'a [u8],
+        value: &'a [u8]
+    ) -> io::Result<SetRes> {
+
         let mut set = SetReq::new();
         set.set_key(key.to_vec());
         set.set_value(value.to_vec());
@@ -53,6 +55,73 @@ impl Client {
                      set_res.get_txid(),
                      set_res.get_err());
             cli_res.get_set().clone()
+        })
+    }
+
+    pub fn get<'a>(
+        &mut self,
+        key: &'a [u8],
+    ) -> io::Result<GetRes> {
+
+        let mut get = GetReq::new();
+        get.set_key(key.to_vec());
+        let mut req = CliReq::new();
+        req.set_get(get);
+        req.set_req_id(self.get_id());
+
+        self.req(key.to_vec(), req).map(|cli_res| {
+            let get_res = cli_res.get_get();
+            println!("got response success: {} txid: {} err: {}",
+                     get_res.get_success(),
+                     get_res.get_txid(),
+                     get_res.get_err());
+            cli_res.get_get().clone()
+        })
+    }
+
+    pub fn cas<'a>(
+        &mut self,
+        key: &'a [u8],
+        old_value: &'a [u8],
+        new_value: &'a [u8]
+    ) -> io::Result<CASRes> {
+
+        let mut cas = CASReq::new();
+        cas.set_key(key.to_vec());
+        cas.set_old_value(old_value.to_vec());
+        cas.set_new_value(new_value.to_vec());
+        let mut req = CliReq::new();
+        req.set_cas(cas);
+        req.set_req_id(self.get_id());
+
+        self.req(key.to_vec(), req).map(|cli_res| {
+            let cas_res = cli_res.get_cas();
+            println!("got response success: {} txid: {} err: {}",
+                     cas_res.get_success(),
+                     cas_res.get_txid(),
+                     cas_res.get_err());
+            cli_res.get_cas().clone()
+        })
+    }
+
+    pub fn del<'a>(
+        &mut self,
+        key: &'a [u8],
+    ) -> io::Result<DelRes> {
+
+        let mut del = DelReq::new();
+        del.set_key(key.to_vec());
+        let mut req = CliReq::new();
+        req.set_del(del);
+        req.set_req_id(self.get_id());
+
+        self.req(key.to_vec(), req).map(|cli_res| {
+            let del_res = cli_res.get_del();
+            println!("got response success: {} txid: {} err: {}",
+                     del_res.get_success(),
+                     del_res.get_txid(),
+                     del_res.get_err());
+            cli_res.get_del().clone()
         })
     }
 

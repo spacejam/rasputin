@@ -38,7 +38,8 @@ fn main() {
         .map(|s| s.parse().unwrap())
         .collect();
 
-    let mut cli = Client::new(peers, 1);
+    let nthreads = 1;
+    let mut cli = Client::new(peers, nthreads);
 
     args.flag_set.map(|kv: String| {
         let kvs: Vec<&str> = kv.splitn(2, ",").take(2).collect();
