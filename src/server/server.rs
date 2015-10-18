@@ -709,9 +709,11 @@ impl<C: Clock, RE> Server<C, RE> {
     fn replicate(&mut self, mutations: Vec<Mutation>) {
         if mutations.len() > 0 {
             for mutation in mutations {
+                let txid = mutation.get_version().get_txid();
                 self.rep_log.append(mutation.get_version().get_term(),
-                                    mutation.get_version().get_txid(),
+                                    txid,
                                     mutation);
+                self.rep_log.ack_up_to(txid, self.id.clone());
             }
 
             debug!("in replicate, we have {} rep_peers", self.rep_peers.len());
@@ -727,6 +729,9 @@ impl<C: Clock, RE> Server<C, RE> {
 
                     match self.rep_log.get(txid) {
                         Some(mutation) => {
+                            // TODO(tyler) can we avoid copies here?
+                            // maybe if multiple Buf implementors could
+                            // hold RC<Box<underlying>>?
                             batch.push(mutation.clone());
                             peer.max_sent_txid = mutation.get_version()
                                                          .get_txid();
