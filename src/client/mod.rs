@@ -50,7 +50,7 @@ impl Client {
 
         self.req(key.to_vec(), req).map(|cli_res| {
             let set_res = cli_res.get_set();
-            println!("got response success: {} txid: {} err: {}",
+            debug!("got response success: {} txid: {} err: {}",
                      set_res.get_success(),
                      set_res.get_txid(),
                      set_res.get_err());
@@ -71,7 +71,7 @@ impl Client {
 
         self.req(key.to_vec(), req).map(|cli_res| {
             let get_res = cli_res.get_get();
-            println!("got response success: {} txid: {} err: {}",
+            debug!("got response success: {} txid: {} err: {}",
                      get_res.get_success(),
                      get_res.get_txid(),
                      get_res.get_err());
@@ -96,7 +96,7 @@ impl Client {
 
         self.req(key.to_vec(), req).map(|cli_res| {
             let cas_res = cli_res.get_cas();
-            println!("got response success: {} txid: {} err: {}",
+            debug!("got response success: {} txid: {} err: {}",
                      cas_res.get_success(),
                      cas_res.get_txid(),
                      cas_res.get_err());
@@ -117,7 +117,7 @@ impl Client {
 
         self.req(key.to_vec(), req).map(|cli_res| {
             let del_res = cli_res.get_del();
-            println!("got response success: {} txid: {} err: {}",
+            debug!("got response success: {} txid: {} err: {}",
                      del_res.get_success(),
                      del_res.get_txid(),
                      del_res.get_err());
@@ -128,7 +128,7 @@ impl Client {
     fn req(&mut self, key: Vec<u8>, req: CliReq) -> io::Result<CliRes> {
         // send to a peer, they'll redirect us if we're wrong
         for peer in self.servers.iter() {
-            println!("trying peer {:?}", peer);
+            debug!("trying peer {:?}", peer);
             let mut stream_attempt = TcpStream::connect(&peer);
             if stream_attempt.is_err() {
                 continue;
@@ -141,6 +141,7 @@ impl Client {
                                                       .unwrap()));
 
             if send_to(&mut stream, &mut msg).is_err() {
+                debug!("could not send");
                 continue;
             }
             match recv_into(&mut stream, &mut codec) {
@@ -149,7 +150,7 @@ impl Client {
                     let cli_res: CliRes = protobuf::parse_from_bytes(res)
                                               .unwrap();
                     if cli_res.has_redirect() {
-                        println!("we got redirect to {}!",
+                        debug!("we got redirect to {}!",
                                  cli_res.get_redirect().get_address());
                         // TODO(tyler) try redirected host next
                         continue;
@@ -157,7 +158,7 @@ impl Client {
                     return Ok(cli_res);
                 }
                 Err(e) => {
-                    println!("got err on recv_into: {}", e);
+                    debug!("got err on recv_into: {}", e);
                     continue;
                 }
             }
@@ -170,11 +171,9 @@ fn send_to(stream: &mut TcpStream, buf: &mut ByteBuf) -> io::Result<()> {
     loop {
         match stream.try_write_buf(buf) {
             Ok(None) => {
-                println!("client flushing buf; WOULDBLOCK");
                 continue;
             }
             Ok(Some(r)) => {
-                println!("CONN : we wrote {} bytes!", r);
                 if buf.remaining() == 0 {
                     return Ok(());
                 }
@@ -182,11 +181,11 @@ fn send_to(stream: &mut TcpStream, buf: &mut ByteBuf) -> io::Result<()> {
             Err(e) => {
                 match e.raw_os_error() {
                     Some(32) => {
-                        println!("client disconnected");
+                        debug!("client disconnected");
                     }
                     Some(e) =>
-                        println!("not implemented; client os err={:?}", e),
-                    _ => println!("not implemented; client err={:?}", e),
+                        debug!("not implemented; client os err={:?}", e),
+                    _ => debug!("not implemented; client err={:?}", e),
                 };
                 // Don't reregister.
                 return Err(e);
@@ -202,13 +201,13 @@ fn recv_into<T>(stream: &mut TcpStream,
         let mut res_buf = ByteBuf::mut_with_capacity(1024);
         match stream.try_read_buf(&mut res_buf) {
             Ok(None) => {
-                //println!("got readable, but can't read from the socket");
+                //debug!("got readable, but can't read from the socket");
             }
             Ok(Some(r)) => {
-                println!("CONN : we read {} bytes!", r);
+                //debug!("CONN : we read {} bytes!", r);
             }
             Err(e) => {
-                println!("not implemented; client err={:?}", e);
+                debug!("not implemented; client err={:?}", e);
             }
         }
         let mut r: Vec<T> = codec.decode(&mut res_buf.flip());

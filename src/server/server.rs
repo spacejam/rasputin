@@ -548,7 +548,6 @@ impl<C: Clock, RE> Server<C, RE> {
     }
 
     fn handle_cli(&mut self, req: Envelope) {
-        info!("got cli request!");
         let cli_req: CliReq = protobuf::parse_from_bytes(req.msg.bytes())
                                   .unwrap();
         let mut res = CliRes::new();
@@ -615,8 +614,9 @@ impl<C: Clock, RE> Server<C, RE> {
             mutation.set_key(set_req.get_key().to_vec());
             mutation.set_value(set_req.get_value().to_vec());
 
-            self.replicate(vec![mutation.clone()]);
+            info!("adding pending entry for txid {}", txid);
             self.pending.insert(txid, (req, cli_req.get_req_id()));
+            self.replicate(vec![mutation.clone()]);
             // send a response later after this txid is learned
             return;
         } else if cli_req.has_cas() {
@@ -635,8 +635,8 @@ impl<C: Clock, RE> Server<C, RE> {
             mutation.set_value(cas_req.get_new_value().to_vec());
             mutation.set_old_value(cas_req.get_old_value().to_vec());
 
-            self.replicate(vec![mutation.clone()]);
             self.pending.insert(txid, (req, cli_req.get_req_id()));
+            self.replicate(vec![mutation.clone()]);
             // send a response later after this txid is learned
             return;
         } else if cli_req.has_del() {
@@ -653,8 +653,8 @@ impl<C: Clock, RE> Server<C, RE> {
             mutation.set_version(version);
             mutation.set_key(del_req.get_key().to_vec());
 
-            self.replicate(vec![mutation.clone()]);
             self.pending.insert(txid, (req, cli_req.get_req_id()));
+            self.replicate(vec![mutation.clone()]);
             // send a response later after this txid is learned
             return;
         }
@@ -697,6 +697,8 @@ impl<C: Clock, RE> Server<C, RE> {
                                                          .unwrap()));
         }
 
+        // TODO(tyler) decide on whether to use heartbeats
+        /*
         // heartbeat
         if self.state.is_leader() {
             let mut version = Version::new();
@@ -714,6 +716,7 @@ impl<C: Clock, RE> Server<C, RE> {
 
             self.replicate(vec![mutation]);
         }
+        */
     }
 
     fn new_txid(&mut self) -> TXID {
@@ -747,7 +750,13 @@ impl<C: Clock, RE> Server<C, RE> {
                 self.rep_log.append(mutation.get_version().get_term(),
                                     txid,
                                     mutation);
-                self.rep_log.ack_up_to(txid, self.id.clone());
+
+                // this should only be learned on single replica collections
+                let accepted = self.rep_log.ack_up_to(txid, self.id.clone());
+                for (term, txid) in accepted {
+                    debug!("leader learning txid {}", txid);
+                    self.learn(term, txid);
+                }
             }
 
             debug!("in replicate, we have {} rep_peers", self.rep_peers.len());
@@ -813,8 +822,10 @@ impl<C: Clock, RE> Server<C, RE> {
 
         let mut res = CliRes::new();
 
+        info!("matching field type {:?}", mutation.get_field_type());
         match mutation.get_field_type() {
             MutationType::KVSET => {
+                info!("processing set!");
                 let mut set_res = SetRes::new();
                 match self.db.put(mutation.get_key(), mutation.get_value()) {
                     Ok(_) => set_res.set_success(true),
@@ -897,6 +908,7 @@ impl<C: Clock, RE> Server<C, RE> {
                         del_res.set_err(format!("Operational problem encountered: {}", e));
                     }
                 }
+                res.set_del(del_res);
             },
         }
 
@@ -904,6 +916,7 @@ impl<C: Clock, RE> Server<C, RE> {
         let pending = self.pending.remove(&txid);
         match pending {
             Some((env, req_id)) => {
+                info!("found pending listener");
                 // If there's a pending client request associated with this,
                 // then send them a response.
                 res.set_req_id(req_id);
@@ -911,7 +924,9 @@ impl<C: Clock, RE> Server<C, RE> {
                            ByteBuf::from_slice(&*res.write_to_bytes()
                                                     .unwrap()));
             }
-            None => (),
+            None => {
+                info!("could not find pending for this learned request");   
+            },
         }
     }
 

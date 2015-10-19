@@ -13,7 +13,7 @@ use self::log::LogLevel;
 
 #[test]
 fn client() {
-    //logging::init_logger(None, LogLevel::Debug).unwrap();
+    //logging::init_logger(None, LogLevel::Info).unwrap();
     
     thread::spawn( move || {
         Server::<RealClock, Result<(), SendError<Envelope>>>::run(
@@ -35,5 +35,4 @@ fn client() {
     assert!(cli.cas(b"k1", b"v12", b"v13").unwrap().get_value() == b"v13");
     assert!(cli.del(b"k1").unwrap().get_value() == b"v13");
     assert!(cli.get(b"k1").unwrap().get_success() == false);
-    println!("ok!");
 }
