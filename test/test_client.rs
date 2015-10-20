@@ -32,6 +32,7 @@ fn client() {
     assert!(cli.get(b"k1").unwrap().get_value() == b"v1");
     assert!(cli.cas(b"k1", b"v1", b"v12").unwrap().get_value() == b"v12");
     assert!(cli.cas(b"k1", b"vNever", b"vNever2").unwrap().get_value() == b"v12");
+    assert!(cli.cas(b"k1", b"vNever", b"vNever2").unwrap().get_success() == false);
     assert!(cli.cas(b"k1", b"v12", b"v13").unwrap().get_value() == b"v13");
     assert!(cli.del(b"k1").unwrap().get_value() == b"v13");
     assert!(cli.get(b"k1").unwrap().get_success() == false);

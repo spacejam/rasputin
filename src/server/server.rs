@@ -88,7 +88,6 @@ impl<C: Clock, RE> Server<C, RE> {
         thread::Builder::new()
             .name("IO loop".to_string())
             .spawn(move || {
-
                 tc.run_event_loop(event_loop);
                 tex1.send(());
             });
@@ -127,7 +126,6 @@ impl<C: Clock, RE> Server<C, RE> {
         thread::Builder::new()
             .name("peer request handler".to_string())
             .spawn(move || {
-
                 for req in peer_req_rx {
                     match srv1.lock() {
                         Ok(mut srv) => srv.handle_peer(req),
@@ -146,7 +144,6 @@ impl<C: Clock, RE> Server<C, RE> {
         thread::Builder::new()
             .name("cli request handler".to_string())
             .spawn(move || {
-
                 for req in cli_req_rx {
                     match srv2.lock() {
                         Ok(mut srv) => srv.handle_cli(req),
@@ -165,7 +162,6 @@ impl<C: Clock, RE> Server<C, RE> {
         thread::Builder::new()
             .name("server cron".to_string())
             .spawn(move || {
-
                 let mut rng = thread_rng();
                 loop {
                     clock.sleep_ms(rng.gen_range(400, 500));
@@ -616,7 +612,7 @@ impl<C: Clock, RE> Server<C, RE> {
 
             info!("adding pending entry for txid {}", txid);
             self.pending.insert(txid, (req, cli_req.get_req_id()));
-            self.replicate(vec![mutation.clone()]);
+            self.replicate(vec![mutation]);
             // send a response later after this txid is learned
             return;
         } else if cli_req.has_cas() {
@@ -636,7 +632,7 @@ impl<C: Clock, RE> Server<C, RE> {
             mutation.set_old_value(cas_req.get_old_value().to_vec());
 
             self.pending.insert(txid, (req, cli_req.get_req_id()));
-            self.replicate(vec![mutation.clone()]);
+            self.replicate(vec![mutation]);
             // send a response later after this txid is learned
             return;
         } else if cli_req.has_del() {
@@ -654,7 +650,7 @@ impl<C: Clock, RE> Server<C, RE> {
             mutation.set_key(del_req.get_key().to_vec());
 
             self.pending.insert(txid, (req, cli_req.get_req_id()));
-            self.replicate(vec![mutation.clone()]);
+            self.replicate(vec![mutation]);
             // send a response later after this txid is learned
             return;
         }
