@@ -11,7 +11,7 @@ current reasons why you don't want to use this beyond playing with it:
 1. Mostly unimplemented.  We don't have support for automatic resharding, real transactions or collection types other than KV yet.  These are still in the planning phase.
 1. Possibly incorrect.  We have not yet proven the correctness of the core consensus algorithm.  We may be able to adapt the Raft Coq proof to this end, as we are essentially replacing Raft's preemptible leadership with a non-preempting lease to improve throughput in the presence of partial partitions.
 1. Inefficient.  The write path involves a TON of copying.  We are in the process of designing a much more efficient buffer management system.
-1. Buggy.  We have a simulator in place for teasing out bugs in the state machine, but we haven't used it for simulating common datacenter conditions like partitions, delayed message arrival, node restarts/shutdowns/pauses, etc...
+1. Buggy.  Client code is a complete hack that only occasionally works.  We have a simulator in place for teasing out bugs in the state machine, but we haven't used it for simulating common datacenter conditions like partitions, delayed message arrival, node restarts/shutdowns/pauses, etc...
 1. Undocumented.
 1. Unpopular.  No community and no production users (or, at least I hope nobody is using it yet!).
 
