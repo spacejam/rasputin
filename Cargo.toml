@@ -2,7 +2,7 @@
 
 name = "rasputin"
 description = "Hard to kill transactional distributed database"
-version = "0.0.1"
+version = "0.1.0"
 authors = [
   "Tyler Neely <t@jujit.su>",
   "Steve Salevan <steve.salevan@gmail.com>"
