@@ -1,10 +1,10 @@
-use std::fs::{self, OpenOptions, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Error, ErrorKind};
 use std::io::prelude::Write;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use log::{self, LogRecord, LogLevel, LogMetadata, LogLevelFilter,
+use log::{self, LogLevel, LogLevelFilter, LogMetadata, LogRecord,
           SetLoggerError};
 use time;
 
@@ -38,23 +38,26 @@ impl FileLogger {
     pub fn new(path: &str, level: LogLevel) -> Result<FileLogger, Error> {
         let ospath = Path::new(path).parent();
         if ospath.is_none() {
-            return Err(Error::new(
-                ErrorKind::Other,
-                format!("Failed to use log directory: {}", path)
-            ));
+            return Err(Error::new(ErrorKind::Other,
+                                  format!("Failed to use log directory: {}",
+                                          path)));
         }
 
         match fs::create_dir_all(&ospath.unwrap()) {
-            Err(e) => return Err(Error::new(
-                ErrorKind::Other,
-                format!("Failed to create log directory: {}", e)
-            )),
+            Err(e) => return Err(Error::new(ErrorKind::Other,
+                                            format!("Failed to create log \
+                                                     directory: {}",
+                                                    e))),
             Ok(_) => (),
         }
 
         OpenOptions::new()
-            .create(true).write(true).append(true).open(path).map( |file| {
-                FileLogger{
+            .create(true)
+            .write(true)
+            .append(true)
+            .open(path)
+            .map(|file| {
+                FileLogger {
                     file: Arc::new(Mutex::new(file)),
                     level: level,
                 }
@@ -71,22 +74,28 @@ impl log::Log for FileLogger {
         if self.enabled(record.metadata()) {
             let mut logfile = self.file.clone();
             logfile.lock()
-                .unwrap()
-                .write_all(format!("{} {} {}:{}] {}\n",
-                                   record.level(),
-                                   time::now().to_timespec().sec,
-                                   record.location()
-                                         .file().split("/").last().unwrap(),
-                                   record.location().line(),
-                                   record.args()).as_bytes());
+                   .unwrap()
+                   .write_all(format!("{} {} {}:{}] {}\n",
+                                      record.level(),
+                                      time::now().to_timespec().sec,
+                                      record.location()
+                                            .file()
+                                            .split("/")
+                                            .last()
+                                            .unwrap(),
+                                      record.location().line(),
+                                      record.args())
+                                  .as_bytes());
         }
     }
 }
 
-pub fn init_logger(path: Option<String>, level: LogLevel) -> Result<(), SetLoggerError> {
+pub fn init_logger(path: Option<String>,
+                   level: LogLevel)
+                   -> Result<(), SetLoggerError> {
     let logger: Box<log::Log> = match path {
         Some(p) => Box::new(FileLogger::new(p.trim_left(), level).unwrap()),
-        None => Box::new(StdoutLogger{ level: level })
+        None => Box::new(StdoutLogger { level: level }),
     };
 
     log::set_logger(|max_log_level| {

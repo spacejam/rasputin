@@ -28,7 +28,7 @@ fn election_safety() {
     //logging::init_logger(None, LogLevel::Debug).unwrap();
     let mut sim = SimCluster::new("safety", 5);
     let mut leaders = BTreeMap::new();
-    for i in 0..300 {
+    for i in 0..3000 {
         sim.step();
         for (id, n) in sim.nodes.iter() {
             if n.server.state.is_leader() {
@@ -44,7 +44,7 @@ fn election_safety() {
 fn stable_leader_with_no_faults() {
     let mut sim = SimCluster::new("stable", 5);
     let mut leader = None;
-    for i in 0..300 {
+    for i in 0..3000 {
         sim.step();
         for (id, n) in sim.nodes.iter() {
              match n.server.state.term() {
@@ -60,7 +60,6 @@ fn stable_leader_with_no_faults() {
                      // elected.
                      assert!(leader.is_none());
                  },
-
              }
         }
     }

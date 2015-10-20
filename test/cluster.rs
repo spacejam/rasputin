@@ -24,8 +24,9 @@ use self::uuid::Uuid;
 // messages between the same two nodes preserve ordering, because we use a
 // single tcp connection for now)
 
-enum NetworkCondition {
-    Partition(SocketAddr, SocketAddr)
+enum Condition {
+    Partition { node1: u16, node2: u16 },
+    Paused { node: u16 }
 }
 
 enum Event {
@@ -47,7 +48,7 @@ pub struct SimCluster {
     clock: u64, // elapsed time in ms
     events: BTreeMap<u64, Vec<Event>>, // times to events
     pub nodes: BTreeMap<u16, SimServer>,
-    filters: Vec<NetworkCondition>,
+    filters: Vec<Condition>,
 }
 
 impl SimCluster {
@@ -135,6 +136,12 @@ impl SimCluster {
         ns
     }
 
+    pub fn leaders(&self) -> Vec<u16> {
+        self.nodes.iter()
+                  .filter(|&(id, n)| n.server.state.is_leader())
+                  .map(|(id, n)| *id).collect()
+    }
+
     pub fn pause_node(&mut self, node: u16) -> Result<(), ()> {
         // TODO
         Err(())
@@ -145,14 +152,20 @@ impl SimCluster {
         Err(())
     }
 
-    pub fn partition_nodes(&mut self, node1: u16, node2: u16) -> Result<(), ()> {
+    pub fn partition_two_nodes(&mut self, node1: u16, node2: u16) -> Result<(), ()> {
         // TODO
         Err(())
     }
 
-    pub fn unpartition_nodes(&mut self, node1: u16, node2: u16) -> Result<(), ()> {
+    pub fn unpartition_two_nodes(&mut self, node1: u16, node2: u16) -> Result<(), ()> {
         // TODO
         Err(())
+    }
+
+    pub fn partition_all(&mut self) {
+    }
+
+    pub fn unpartition_all(&mut self) {
     }
 
     pub fn advance_time(&mut self, ms: u64) {

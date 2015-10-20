@@ -8,22 +8,22 @@ pub mod rocksdb;
 pub use server::server::Server;
 pub use server::connset::ConnSet;
 pub use server::server_conn::ServerConn;
-pub use server::acked_log::{AckedLog, LogEntry, InMemoryLog};
+pub use server::acked_log::{AckedLog, InMemoryLog, LogEntry};
 
 use std::io::{Error, ErrorKind};
 use std::io;
 use std::net::SocketAddr;
 use std::ops::{Add, Sub};
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{self, Sender, Receiver, SendError};
+use std::sync::mpsc::{self, Receiver, SendError, Sender};
 use std::thread;
 use std::usize;
 
-use bytes::{alloc, Buf, ByteBuf, MutByteBuf, SliceBuf};
+use bytes::{Buf, ByteBuf, MutByteBuf, SliceBuf, alloc};
 use mio;
-use mio::{EventLoop, EventSet, PollOpt, Handler, NotifyError,
-          Token, TryWrite, TryRead};
-use mio::tcp::{TcpListener, TcpStream, TcpSocket};
+use mio::{EventLoop, EventSet, Handler, NotifyError, PollOpt, Token, TryRead,
+          TryWrite};
+use mio::tcp::{TcpListener, TcpSocket, TcpStream};
 use mio::util::Slab;
 use rand::{Rng, thread_rng};
 use rocksdb::{DB, Writable};
@@ -119,54 +119,47 @@ pub enum State {
 }
 
 impl State {
-    fn valid_leader(&self, now: time::Timespec)  -> bool {
+    fn valid_leader(&self, now: time::Timespec) -> bool {
         match *self {
-            State::Leader{until: until, ..} =>
-                now < until,
+            State::Leader{until: until, ..} => now < until,
             State::Follower{
                 term:_, id:_, leader_addr: _, until: until, tok: _
-            } =>
-                now < until,
+            } => now < until,
             _ => false,
         }
     }
 
     fn valid_candidate(&self, now: time::Timespec) -> bool {
         match *self {
-            State::Candidate{until: until, ..} =>
-                now < until,
+            State::Candidate{until: until, ..} => now < until,
             _ => false,
         }
     }
 
     pub fn is_leader(&self) -> bool {
         match *self {
-            State::Leader{..} =>
-                true,
+            State::Leader{..} => true,
             _ => false,
         }
     }
 
     fn is_follower(&self) -> bool {
         match *self {
-            State::Follower{..} =>
-                true,
+            State::Follower{..} => true,
             _ => false,
         }
     }
 
     fn is_following(&self, id: PeerID) -> bool {
         match *self {
-            State::Follower{id: ref lid, .. } =>
-                *lid == id,
+            State::Follower{id: ref lid, .. } => *lid == id,
             _ => false,
         }
     }
 
     fn is_candidate(&self) -> bool {
         match *self {
-            State::Candidate{..} => 
-                true,
+            State::Candidate{..} => true,
             _ => false,
         }
     }
@@ -175,7 +168,7 @@ impl State {
         match *self {
             State::Leader{until: until, ..} => {
                 now.add(*LEADER_REFRESH) >= until && now < until
-            },
+            }
             _ => false,
         }
     }
@@ -186,41 +179,32 @@ impl State {
                 have.len() > need as usize,
             State::Leader{have: ref have, need: need, ..} =>
                 have.len() > need as usize,
-            _ =>
-                false,
+            _ => false,
         }
     }
 
     fn following(&self, id: PeerID) -> bool {
         match *self {
-            State::Follower{id: ref fid, until: until, .. } =>
-                id == *fid,
+            State::Follower{id: ref fid, until: until, .. } => id == *fid,
             _ => false,
         }
     }
 
     fn until(&self) -> Option<time::Timespec> {
         match *self {
-            State::Leader{until: until, ..} =>
-                Some(until),
-            State::Candidate{until: until, ..} =>
-                Some(until),
-            State::Follower{ until: until, .. } =>
-                Some(until),
+            State::Leader{until: until, ..} => Some(until),
+            State::Candidate{until: until, ..} => Some(until),
+            State::Follower{ until: until, .. } => Some(until),
             _ => None,
         }
     }
 
     pub fn term(&self) -> Option<Term> {
         match *self {
-            State::Leader{term: term, ..} =>
-                Some(term),
-            State::Candidate{term: term, ..} =>
-                Some(term),
-            State::Follower{term: term, .. } =>
-                Some(term),
+            State::Leader{term: term, ..} => Some(term),
+            State::Candidate{term: term, ..} => Some(term),
+            State::Follower{term: term, .. } => Some(term),
             _ => None,
         }
     }
 }
-

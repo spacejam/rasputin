@@ -1,7 +1,7 @@
 use std::ops::Add;
 
-use bytes::{alloc, MutByteBuf, ByteBuf, Buf, MutBuf};
-use mio::{TryWrite, TryRead};
+use bytes::{Buf, ByteBuf, MutBuf, MutByteBuf, alloc};
+use mio::{TryRead, TryWrite};
 
 pub trait Codec<In: ?Sized, Out: ?Sized>
 {
@@ -16,8 +16,11 @@ pub struct CodecStack<In, Mid, Out> {
 
 impl <In, Mid, Out> Codec<In, Out> for CodecStack<In, Mid, Out> {
     fn decode(&mut self, buf: &mut In) -> Vec<Out> {
-        self.left.decode(buf).iter_mut().flat_map( |mut d|
-            self.right.decode(&mut d)).collect()
+        self.left
+            .decode(buf)
+            .iter_mut()
+            .flat_map(|mut d| self.right.decode(&mut d))
+            .collect()
     }
 
     fn encode(&self, out: Out) -> In {
@@ -53,15 +56,15 @@ impl Codec<ByteBuf, ByteBuf> for Framed {
                 }
 
                 let sz_buf = self.sz_buf.bytes();
-                let size = array_to_usize([sz_buf[0], sz_buf[1], sz_buf[2], sz_buf[3]]);
+                let size = array_to_usize([sz_buf[0], sz_buf[1], sz_buf[2],
+                                           sz_buf[3]]);
                 self.msg = unsafe {
                     // manually create bytebuf so we can have exact cap and lim
-                    Some(ByteBuf::from_mem_ref(
-                        alloc::heap(size.next_power_of_two()),
-                        size as u32, // cap
-                        0,           // pos
-                        size as u32  // lim
-                    ).flip())
+                    Some(ByteBuf::from_mem_ref(alloc::heap(size.next_power_of_two()),
+                                               size as u32, // cap
+                                               0, // pos
+                                               size as u32 /* lim */)
+                             .flip())
                 };
             }
 
@@ -84,7 +87,7 @@ impl Codec<ByteBuf, ByteBuf> for Framed {
                         self.msg = Some(msg);
                         break
                     }
-                },
+                }
                 _ => break,
             }
         }
@@ -100,15 +103,13 @@ impl Codec<ByteBuf, ByteBuf> for Framed {
     }
 }
 
-pub fn usize_to_array(u: usize) -> [u8;4] {
+pub fn usize_to_array(u: usize) -> [u8; 4] {
     [(u >> 24) as u8, (u >> 16) as u8, (u >> 8) as u8, u as u8]
 }
 
-pub fn array_to_usize(ip: [u8;4]) -> usize {
-    ((ip[0] as usize) << 24) as usize +
-        ((ip[1] as usize) << 16) as usize +
-        ((ip[2] as usize) << 8) as usize +
-        (ip[3] as usize)
+pub fn array_to_usize(ip: [u8; 4]) -> usize {
+    ((ip[0] as usize) << 24) as usize + ((ip[1] as usize) << 16) as usize +
+    ((ip[2] as usize) << 8) as usize + (ip[3] as usize)
 }
 
 #[cfg(test)]
@@ -118,7 +119,7 @@ mod tests {
 
     use codec;
     use codec::Codec;
-    use bytes::{MutByteBuf, ByteBuf, Buf};
+    use bytes::{Buf, ByteBuf, MutByteBuf};
 
     fn array_prop(u: usize) -> bool {
         codec::array_to_usize(codec::usize_to_array(u)) == u
@@ -126,8 +127,8 @@ mod tests {
 
     #[test]
     fn test_usize_to_array_to_usize() {
-        quickcheck::quickcheck(array_prop as fn(usize)->bool);
-        let ip = [250,1,2,3];
+        quickcheck::quickcheck(array_prop as fn(usize) -> bool);
+        let ip = [250, 1, 2, 3];
         assert!(codec::usize_to_array(codec::array_to_usize(ip)) == ip);
     }
 
@@ -147,6 +148,6 @@ mod tests {
 
     #[test]
     fn test_framed_codec() {
-        quickcheck::quickcheck(framed_prop as fn(usize)->bool);
+        quickcheck::quickcheck(framed_prop as fn(usize) -> bool);
     }
 }
