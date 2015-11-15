@@ -1,7 +1,7 @@
-pub use server::{PeerID, TXID, Term};
 use std::fmt;
-
 use std::collections::BTreeMap;
+
+use server::{PeerID, TXID, Term};
 
 pub trait AckedLog<T> {
     fn append(&mut self, term: Term, txid: TXID, entry: T);
@@ -64,7 +64,7 @@ unsafe impl<T> Sync for InMemoryLog<T>{}
 
 impl<T: Clone> AckedLog<T> for InMemoryLog<T> {
     fn append(&mut self, term: Term, txid: TXID, entry: T) {
-        //TODO verify txid > last accepted
+        // TODO verify txid > last accepted
         assert!(txid > self.last_accepted_txid);
         self.pending.insert(txid,
                             Acked {
@@ -97,7 +97,7 @@ impl<T: Clone> AckedLog<T> for InMemoryLog<T> {
                 if !ent.acks.contains(&peer) {
                     ent.acks.push(peer)
                 }
-                break
+                break;
             }
         }
         let mut reached_quorum = vec![];

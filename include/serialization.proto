@@ -6,8 +6,7 @@ package rasputin;
 // Client <-> rasputin server messages
 //
 message SetReq {
-  required bytes key = 1;
-  required bytes value = 2;
+  required bytes value = 1;
 }
 
 message SetRes {
@@ -17,7 +16,6 @@ message SetRes {
 }
 
 message GetReq {
-  required bytes key = 1;
 }
 
 message GetRes {
@@ -28,9 +26,8 @@ message GetRes {
 }
 
 message CASReq {
-  required bytes key = 1;
-  optional bytes new_value = 2;
-  optional bytes old_value = 3;
+  optional bytes new_value = 1;
+  optional bytes old_value = 2;
 }
 
 message CASRes {
@@ -41,7 +38,6 @@ message CASRes {
 }
 
 message DelReq {
-  required bytes key = 1;
 }
 
 message DelRes {
@@ -52,10 +48,9 @@ message DelRes {
 }
 
 message WatchReq {
-  required bytes key = 1;
-  required uint64 last_txid = 2;
-  required bool recursive = 3;
-  required bool historical = 4;
+  required uint64 last_txid = 1;
+  required bool recursive = 2;
+  required bool historical = 3;
 }
 
 message WatchRes {
@@ -92,12 +87,13 @@ message Version {
 
 // client top-levl API
 message CliReq {
-  required uint64 req_id = 1;
-  optional GetReq get = 2;
-  optional SetReq set = 3;
-  optional CASReq cas = 4;
-  optional DelReq del = 5;
-  optional WatchReq watch = 6;
+  required bytes key = 1;
+  required uint64 req_id = 2;
+  optional GetReq get = 3;
+  optional SetReq set = 4;
+  optional CASReq cas = 5;
+  optional DelReq del = 6;
+  optional WatchReq watch = 7;
 }
 
 message CliRes {

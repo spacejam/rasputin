@@ -1,27 +1,93 @@
-use rocksdb::{DB, Writable};
+use std::io::{self, Error, ErrorKind};
+use std::mem;
+
+use rocksdb::{DB, Direction, Writable};
 use rocksdb::Options as RocksDBOptions;
 
-pub fn new(storage_dir: String) -> DB {
-    let mut opts = RocksDBOptions::new();
-    let memtable_budget = 1024;
-    opts.optimize_level_style_compaction(memtable_budget);
-    opts.create_if_missing(true);
-    match DB::open_cf(&opts, &storage_dir, &["storage", "local_meta"]) {
-        Ok(db) => db,
-        Err(_) => {
-            info!("Attempting to initialize data directory at {}", storage_dir);
-            match DB::open(&opts, &storage_dir) {
-                Ok(mut db) => {
-                    db.create_cf("storage", &RocksDBOptions::new()).unwrap();
-                    db.create_cf("local_meta", &RocksDBOptions::new()).unwrap();
-                    db
-                }
-                Err(e) => {
-                    error!("failed to create database at {}", storage_dir);
-                    error!("{}", e);
-                    panic!(e);
+use server::storage::{Store, RetentionPolicy};
+
+pub struct KV {
+    db: DB,
+}
+
+impl KV {
+    pub fn new(storage_dir: String) -> KV {
+        let mut opts = RocksDBOptions::new();
+        let memtable_budget = 1024;
+        opts.optimize_level_style_compaction(memtable_budget);
+        opts.create_if_missing(true);
+        match DB::open_cf(&opts, &storage_dir, &["storage", "local_meta"]) {
+            Ok(db) => KV { db: db },
+            Err(_) => {
+                info!("Attempting to initialize data directory at {}", storage_dir);
+                match DB::open(&opts, &storage_dir) {
+                    Ok(mut db) => {
+                        db.create_cf("storage", &RocksDBOptions::new()).unwrap();
+                        db.create_cf("local_meta", &RocksDBOptions::new()).unwrap();
+                        KV { db: db }
+                    }
+                    Err(e) => {
+                        error!("failed to create database at {}", storage_dir);
+                        error!("{}", e);
+                        panic!(e);
+                    }
                 }
             }
         }
     }
+}
+
+unsafe impl Sync for KV{}
+
+impl Store for KV {
+    fn put(&self, k: &[u8], v: &[u8], version: u64) -> io::Result<()> {
+        let mut new_k = k.to_vec();
+        unsafe {
+            for i in mem::transmute::<u64, [u8; 8]>(version.to_be()).iter() {
+                new_k.push(*i)
+            }
+        }
+        self.db.put(&*new_k, v);
+    }
+
+    fn get_last(&self, k: &[u8]) -> io::Result<Option<Vec<u8>>> {
+        let mut iter = self.db.iterator();
+        // rocksdb will return the next highest when iterating in reverse
+        // TODO(tyler) is this a bug in rocksdb, or rust-rocksdb?
+        for (key, value) in iter.from(&*upper_bound(k), Direction::reverse)
+                                .filter(|kv| kv.0.starts_with(k)) {
+            unsafe {
+                return Ok(Some(value.to_vec()));
+            }
+        }
+        Ok(None)
+    }
+
+    fn scan_from(&self, k: Vec<u8>, i: u64) -> Iterator<Item = Vec<u8>> {
+        let mut iter = self.db.iterator();
+        iter.from(b"k", Direction::forward)
+            .take_while(|kv| kv.0.len() > 8 && kv.0.starts_with(&*k))
+    }
+
+    fn delete(&self, k: &[u8]) -> io::Result<()> {
+        match self.db.delete(k) {
+            Ok(_) => Ok(()),
+            Err(e) => Err((Error::new(ErrorKind::Other, e))),
+        }
+    }
+
+    fn gc(&self, policy: RetentionPolicy) {
+        // TODO(tyler) implement trimming
+    }
+}
+
+fn upper_bound<'a>(k: &[u8]) -> Vec<u8> {
+    let mut rk = k.to_vec();
+    if rk.len() == 0 || *rk.last().unwrap() == 0xff {
+        rk.push(0x00);
+    } else {
+        let tail = rk.pop().unwrap();
+        rk.push(tail + 1);
+    }
+    rk
 }

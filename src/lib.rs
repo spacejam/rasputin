@@ -1,10 +1,9 @@
 #![crate_id = "rasputin"]
 #![crate_type = "lib"]
 
-pub use serialization::{Append, AppendRes, CASReq, CASRes, CliReq, CliRes,
-                        GetReq, GetRes, Mutation, MutationType, PeerMsg,
-                        RedirectRes, SetReq, SetRes, Version, VoteReq, VoteRes,
-                        WatchReq, WatchRes, DelReq, DelRes};
+pub use serialization::{Append, AppendRes, CASReq, CASRes, CliReq, CliRes, GetReq, GetRes,
+                        Mutation, MutationType, PeerMsg, RedirectRes, SetReq, SetRes, Version,
+                        VoteReq, VoteRes, WatchReq, WatchRes, DelReq, DelRes};
 
 pub use codec::{Codec, Framed};
 
@@ -34,3 +33,10 @@ extern crate rocksdb;
 extern crate time;
 extern crate uuid;
 extern crate threadpool;
+
+pub enum CollectionKind {
+    KV,
+    Log,
+    Object,
+    Timeseries,
+}

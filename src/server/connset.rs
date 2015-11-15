@@ -19,9 +19,7 @@ pub struct ConnSet {
 }
 
 impl ConnSet {
-    pub fn accept(&mut self,
-                  event_loop: &mut EventLoop<TrafficCop>)
-                  -> io::Result<()> {
+    pub fn accept(&mut self, event_loop: &mut EventLoop<TrafficCop>) -> io::Result<()> {
 
         debug!("ConnSet accepting socket");
 
@@ -45,7 +43,7 @@ impl ConnSet {
         self.conns
             .insert(conn)
             .map(|tok| {
-            // Register the connection
+                // Register the connection
                 self.conns[tok].token = Some(tok);
                 event_loop.register_opt(&self.conns[tok].sock,
                                         tok,
@@ -55,9 +53,7 @@ impl ConnSet {
                           .expect("could not register socket with event loop");
                 tok
             })
-            .or_else(|e| {
-                Err(Error::new(ErrorKind::Other, "All connection slots full."))
-            })
+            .or_else(|e| Err(Error::new(ErrorKind::Other, "All connection slots full.")))
     }
 
     pub fn conn_readable(&mut self,

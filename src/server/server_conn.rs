@@ -32,12 +32,10 @@ impl ServerConn {
         }
     }
 
-    pub fn writable(&mut self,
-                    event_loop: &mut EventLoop<TrafficCop>)
-                    -> io::Result<()> {
+    pub fn writable(&mut self, event_loop: &mut EventLoop<TrafficCop>) -> io::Result<()> {
         if self.res_bufs.len() == 0 {
             // no responses yet, don't reregister
-            return Ok(())
+            return Ok(());
         }
         let mut res_buf = self.res_bufs.remove(0);
 
@@ -64,7 +62,7 @@ impl ServerConn {
                     }
                     Some(e) => info!("not implemented; client os err={:?}", e),
                     _ => info!("not implemented; client err={:?}", e),
-                };
+                }
                 // Don't reregister.
                 return Err(e);
             }
@@ -81,9 +79,7 @@ impl ServerConn {
                               PollOpt::edge() | PollOpt::oneshot())
     }
 
-    pub fn readable(&mut self,
-                    event_loop: &mut EventLoop<TrafficCop>)
-                    -> io::Result<()> {
+    pub fn readable(&mut self, event_loop: &mut EventLoop<TrafficCop>) -> io::Result<()> {
 
         // TODO(tyler) get rid of this double copying and read
         // directly to codec
@@ -95,13 +91,13 @@ impl ServerConn {
             }
             Ok(Some(r)) => {
                 debug!("CONN : we read {} bytes!", r);
-                //T self.interest.remove(EventSet::readable());
+                // T self.interest.remove(EventSet::readable());
             }
             Err(e) => {
                 info!("not implemented; client err={:?}", e);
                 self.interest.remove(EventSet::readable());
             }
-        };
+        }
 
         for req in self.req_codec.decode(&mut req_buf.flip()) {
             self.req_tx.send(Envelope {
