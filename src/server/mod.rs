@@ -35,7 +35,6 @@ use time;
 
 pub const SERVER_CLIENTS: Token = Token(0);
 pub const SERVER_PEERS: Token = Token(1);
-pub const PEER_BROADCAST: Token = Token(usize::MAX);
 
 lazy_static! {
     pub static ref LEADER_DURATION: time::Duration =

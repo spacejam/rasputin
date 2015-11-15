@@ -18,7 +18,7 @@ use uuid::Uuid;
 use {CollectionKind, Append, AppendRes, CliReq, CliRes, Clock, GetReq, GetRes, Mutation,
      MutationType, PeerMsg, RealClock, RedirectRes, SetReq, SetRes, Version, CASReq, CASRes,
      DelReq, DelRes, VoteReq, VoteRes};
-use server::{Envelope, LEADER_DURATION, PEER_BROADCAST, State, AckedLog, InMemoryLog, LogEntry,
+use server::{Envelope, LEADER_DURATION, State, AckedLog, InMemoryLog, LogEntry,
              PeerID, RepPeer, TXID, Term, SendChannel, Store, KV};
 use server::traffic_cop::TrafficCop;
 

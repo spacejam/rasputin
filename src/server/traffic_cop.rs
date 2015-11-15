@@ -185,13 +185,7 @@ impl Handler for TrafficCop {
     // notify is used to transmit messages
     fn notify(&mut self, event_loop: &mut EventLoop<TrafficCop>, mut msg: Envelope) {
         let mut toks = vec![];
-        if msg.tok == PEER_BROADCAST {
-            for peer in self.peers.iter() {
-                peer.sock.map(|tok| toks.push(tok));
-            }
-        } else {
-            toks.push(msg.tok);
-        }
+        toks.push(msg.tok);
         for tok in toks {
             let sco = self.tok_to_sc(tok);
             if sco.is_none() {
