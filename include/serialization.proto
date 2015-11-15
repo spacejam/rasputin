@@ -144,6 +144,7 @@ message AppendRes {
 
 // server<->server top-level api
 message PeerMsg {
+  required bytes range_prefix = 6;
   required string srvid = 1;
   optional VoteReq vote_req = 2;
   optional VoteRes vote_res = 3;
