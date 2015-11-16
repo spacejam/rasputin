@@ -59,7 +59,9 @@ impl TrafficCop {
         })
     }
 
-    pub fn run_event_loop(&mut self, mut event_loop: EventLoop<TrafficCop>) -> io::Result<()> {
+    pub fn run_event_loop(&mut self,
+                          mut event_loop: EventLoop<TrafficCop>)
+                          -> io::Result<()> {
 
         event_loop.register_opt(&self.cli_handler.srv_sock,
                                 SERVER_CLIENTS,
@@ -94,7 +96,10 @@ impl Handler for TrafficCop {
     type Timeout = ();
     type Message = Envelope;
 
-    fn ready(&mut self, event_loop: &mut EventLoop<TrafficCop>, token: Token, events: EventSet) {
+    fn ready(&mut self,
+             event_loop: &mut EventLoop<TrafficCop>,
+             token: Token,
+             events: EventSet) {
         if events.is_hup() || events.is_error() {
             debug!("clearing error or hup connection");
             match token {
@@ -147,20 +152,24 @@ impl Handler for TrafficCop {
         if events.is_writable() {
             match token {
                 SERVER_PEERS => panic!("received writable for SERVER_PEERS"),
-                SERVER_CLIENTS => panic!("received writable for token SERVER_CLIENTS"),
+                SERVER_CLIENTS =>
+                    panic!("received writable for token SERVER_CLIENTS"),
                 peer if peer.as_usize() > 1 && peer.as_usize() <= 128 => {
                     self.peer_handler.conn_writable(event_loop, peer);
-                },
+                }
                 cli if cli.as_usize() > 128 && cli.as_usize() <= 4096 => {
                     self.cli_handler.conn_writable(event_loop, cli);
-                },
-                t => panic!("received writable for out-of-range token: {}", t.as_usize()),
+                }
+                t => panic!("received writable for out-of-range token: {}",
+                            t.as_usize()),
             }
         }
     }
 
     // timeout is triggered periodically to (re)establish connections to peers.
-    fn timeout(&mut self, event_loop: &mut EventLoop<TrafficCop>, timeout: ()) {
+    fn timeout(&mut self,
+               event_loop: &mut EventLoop<TrafficCop>,
+               timeout: ()) {
         for peer in self.peers.iter_mut() {
             if peer.sock.is_none() {
                 debug!("reestablishing connection with peer");
@@ -185,7 +194,9 @@ impl Handler for TrafficCop {
     }
 
     // notify is used to transmit messages
-    fn notify(&mut self, event_loop: &mut EventLoop<TrafficCop>, mut msg: Envelope) {
+    fn notify(&mut self,
+              event_loop: &mut EventLoop<TrafficCop>,
+              mut msg: Envelope) {
         let mut toks = vec![];
         toks.push(msg.tok);
         for tok in toks {

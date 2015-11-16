@@ -32,7 +32,9 @@ impl ServerConn {
         }
     }
 
-    pub fn writable(&mut self, event_loop: &mut EventLoop<TrafficCop>) -> io::Result<()> {
+    pub fn writable(&mut self,
+                    event_loop: &mut EventLoop<TrafficCop>)
+                    -> io::Result<()> {
         if self.res_bufs.len() == 0 {
             // no responses yet, don't reregister
             return Ok(());
@@ -79,7 +81,9 @@ impl ServerConn {
                               PollOpt::edge() | PollOpt::oneshot())
     }
 
-    pub fn readable(&mut self, event_loop: &mut EventLoop<TrafficCop>) -> io::Result<()> {
+    pub fn readable(&mut self,
+                    event_loop: &mut EventLoop<TrafficCop>)
+                    -> io::Result<()> {
 
         // TODO(tyler) get rid of this double copying and read
         // directly to codec

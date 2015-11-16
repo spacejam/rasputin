@@ -12,7 +12,7 @@ pub use server::connset::ConnSet;
 pub use server::server_conn::ServerConn;
 pub use server::acked_log::{AckedLog, InMemoryLog, LogEntry};
 
-pub use server::storage::{Store, KV, Log, VFS};
+pub use server::storage::{KV, Log, Store, VFS};
 
 use std::io::{Error, ErrorKind};
 use std::io;
@@ -25,7 +25,8 @@ use std::usize;
 
 use bytes::{Buf, ByteBuf, MutByteBuf, SliceBuf, alloc};
 use mio;
-use mio::{EventLoop, EventSet, Handler, NotifyError, PollOpt, Token, TryRead, TryWrite};
+use mio::{EventLoop, EventSet, Handler, NotifyError, PollOpt, Token, TryRead,
+          TryWrite};
 use mio::tcp::{TcpListener, TcpSocket, TcpStream};
 use mio::util::Slab;
 use rand::{Rng, thread_rng};
@@ -176,8 +177,10 @@ impl State {
 
     fn can_extend_lead(&self) -> bool {
         match *self {
-            State::Candidate{have: ref have, need: need, ..} => have.len() > need as usize,
-            State::Leader{have: ref have, need: need, ..} => have.len() > need as usize,
+            State::Candidate{have: ref have, need: need, ..} =>
+                have.len() > need as usize,
+            State::Leader{have: ref have, need: need, ..} =>
+                have.len() > need as usize,
             _ => false,
         }
     }

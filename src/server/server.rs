@@ -15,11 +15,11 @@ use protobuf;
 use protobuf::Message;
 use uuid::Uuid;
 
-use {Append, AppendRes, CliReq, CliRes, Clock, GetReq, GetRes, Mutation, MutationType, PeerMsg,
-     RealClock, RedirectRes, SetReq, SetRes, Version, CASReq, CASRes, DelReq, DelRes, VoteReq,
-     VoteRes};
-use server::{Envelope, LEADER_DURATION, State, AckedLog, InMemoryLog, LogEntry,
-             PeerID, RepPeer, TXID, Term, SendChannel, Store, KV, Range};
+use {Append, AppendRes, CASReq, CASRes, CliReq, CliRes, Clock, DelReq, DelRes,
+     GetReq, GetRes, Mutation, MutationType, PeerMsg, RealClock, RedirectRes,
+     SetReq, SetRes, Version, VoteReq, VoteRes};
+use server::{AckedLog, Envelope, InMemoryLog, KV, LEADER_DURATION, LogEntry,
+             PeerID, Range, RepPeer, SendChannel, State, Store, TXID, Term};
 use server::traffic_cop::TrafficCop;
 
 pub struct Server<C: Clock, RE> {
@@ -35,7 +35,10 @@ pub struct Server<C: Clock, RE> {
 unsafe impl<C: Clock, RE> Sync for Server<C, RE>{}
 
 impl<C: Clock, RE> Server<C, RE> {
-    pub fn run(peer_port: u16, cli_port: u16, storage_dir: String, peers: Vec<String>) {
+    pub fn run(peer_port: u16,
+               cli_port: u16,
+               storage_dir: String,
+               peers: Vec<String>) {
         // All long-running worker threads get a clone of this
         // Sender.  When they exit, they send over it.  If the
         // Receiver ever completes a read, it means something
@@ -51,7 +54,11 @@ impl<C: Clock, RE> Server<C, RE> {
         let (peer_req_tx, peer_req_rx) = mpsc::channel();
         let (cli_req_tx, cli_req_rx) = mpsc::channel();
 
-        let mut tc = TrafficCop::new(peer_port, cli_port, peers.clone(), peer_req_tx, cli_req_tx)
+        let mut tc = TrafficCop::new(peer_port,
+                                     cli_port,
+                                     peers.clone(),
+                                     peer_req_tx,
+                                     cli_req_tx)
                          .unwrap();
 
         // A single MIO EventLoop handles our IO
@@ -153,9 +160,13 @@ impl<C: Clock, RE> Server<C, RE> {
     }
 
     pub fn range_for_key<'a>(&self, key: &[u8]) -> Option<&Range<C, RE>> {
-        let ranges: Vec<&Range<C, RE>> = self.ranges.values()
-                                            .filter(|r| &*r.lower <= key && &*r.upper > key)
-                                            .collect();
+        let ranges: Vec<&Range<C, RE>> = self.ranges
+                                             .values()
+                                             .filter(|r| {
+                                                 &*r.lower <= key &&
+                                                 &*r.upper > key
+                                             })
+                                             .collect();
         if ranges.len() == 1 {
             Some(ranges[0])
         } else {
@@ -163,16 +174,23 @@ impl<C: Clock, RE> Server<C, RE> {
         }
     }
 
-    pub fn range_for_key_mut(&mut self, key: &[u8]) -> Option<&mut Range<C, RE>> {
+    pub fn range_for_key_mut(&mut self,
+                             key: &[u8])
+                             -> Option<&mut Range<C, RE>> {
         let key: Vec<u8> = {
-            let mut ranges: Vec<&Vec<u8>> = self.ranges.iter_mut()
-                                                .filter(|&(k, ref r)| &*r.lower <= key && &*r.upper > key)
+            let mut ranges: Vec<&Vec<u8>> = self.ranges
+                                                .iter_mut()
+                                                .filter(|&(k, ref r)| {
+                                                    &*r.lower <= key &&
+                                                    &*r.upper > key
+                                                })
                                                 .map(|(k, _)| k)
                                                 .collect();
             if ranges.len() == 1 {
                 ranges[0].clone()
             } else {
-                error!("Found several matching range keys in range_for_key_mut!");
+                error!("Found several matching range keys in \
+                        range_for_key_mut!");
                 return None;
             }
         };
@@ -180,18 +198,24 @@ impl<C: Clock, RE> Server<C, RE> {
     }
 
     pub fn handle_peer(&mut self, env: Envelope) {
-        let peer_msg: PeerMsg = protobuf::parse_from_bytes(env.msg.bytes()).unwrap();
-        self.ranges.get_mut(peer_msg.get_range_prefix()).unwrap().handle_peer(env);
+        let peer_msg: PeerMsg = protobuf::parse_from_bytes(env.msg.bytes())
+                                    .unwrap();
+        self.ranges
+            .get_mut(peer_msg.get_range_prefix())
+            .unwrap()
+            .handle_peer(env);
     }
 
     fn handle_cli(&mut self, env: Envelope) {
-        let cli_req: CliReq = protobuf::parse_from_bytes(env.msg.bytes()).unwrap();
+        let cli_req: CliReq = protobuf::parse_from_bytes(env.msg.bytes())
+                                  .unwrap();
         let key = cli_req.get_key();
-        let ranges: Vec<Vec<u8>> = self.ranges.keys()
-                                              .cloned()
-                                              .filter(|k| key.starts_with(k))
-                                              .map(|k| k)
-                                              .collect();
+        let ranges: Vec<Vec<u8>> = self.ranges
+                                       .keys()
+                                       .cloned()
+                                       .filter(|k| key.starts_with(k))
+                                       .map(|k| k)
+                                       .collect();
         if ranges.len() == 0 {
             // TODO(tyler) reply with range-aware redirect
         }

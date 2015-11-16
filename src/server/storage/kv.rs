@@ -1,12 +1,12 @@
-use std::iter::{Iterator, ExactSizeIterator, IntoIterator, FromIterator};
+use std::iter::{ExactSizeIterator, FromIterator, IntoIterator, Iterator};
 use std::io::{self, Error, ErrorKind};
 use std::mem;
 
-use rocksdb::{DB, Direction, Writable, SubDBIterator};
+use rocksdb::{DB, Direction, SubDBIterator, Writable};
 use rocksdb::Options as RocksDBOptions;
 
 use server::TXID;
-use server::storage::{Store, RetentionPolicy};
+use server::storage::{RetentionPolicy, Store};
 
 pub struct KV {
     db: DB,
@@ -21,11 +21,14 @@ impl KV {
         match DB::open_cf(&opts, &storage_dir, &["storage", "local_meta"]) {
             Ok(db) => KV { db: db },
             Err(_) => {
-                info!("Attempting to initialize data directory at {}", storage_dir);
+                info!("Attempting to initialize data directory at {}",
+                      storage_dir);
                 match DB::open(&opts, &storage_dir) {
                     Ok(mut db) => {
-                        db.create_cf("storage", &RocksDBOptions::new()).unwrap();
-                        db.create_cf("local_meta", &RocksDBOptions::new()).unwrap();
+                        db.create_cf("storage", &RocksDBOptions::new())
+                          .unwrap();
+                        db.create_cf("local_meta", &RocksDBOptions::new())
+                          .unwrap();
                         KV { db: db }
                     }
                     Err(e) => {
@@ -63,7 +66,11 @@ impl Store for KV {
         Ok(None)
     }
 
-    fn scan_from(&self, k: &[u8], vsn: TXID, n: usize) -> Vec<(Box<[u8]>, Box<[u8]>)> {
+    fn scan_from(&self,
+                 k: &[u8],
+                 vsn: TXID,
+                 n: usize)
+                 -> Vec<(Box<[u8]>, Box<[u8]>)> {
         let vsn_k = concat_vsn(k, vsn);
         let mut iter = self.db.iterator();
         iter.from(&*vsn_k, Direction::forward)

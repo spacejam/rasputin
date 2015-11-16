@@ -5,16 +5,16 @@ extern crate uuid;
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::net::{SocketAddr, SocketAddrV4, Ipv4Addr};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{self, Sender, Receiver, SendError};
+use std::sync::mpsc::{self, Receiver, SendError, Sender};
 
-use self::rand::{StdRng, SeedableRng, Rng};
+use self::rand::{Rng, SeedableRng, StdRng};
 use self::bytes::{Buf, ByteBuf};
 use self::mio::Token;
-use rasputin::server::{Server, Range, KV, Envelope, State, Peer, InMemoryLog,
-                       LEADER_DURATION};
-use rasputin::{Clock, TestClock, Mutation};
+use rasputin::server::{Envelope, InMemoryLog, KV, LEADER_DURATION, Peer,
+                       Range, Server, State};
+use rasputin::{Clock, Mutation, TestClock};
 use self::uuid::Uuid;
 
 // SimCluster facilitates testing a cluster against network failures.
@@ -24,13 +24,23 @@ use self::uuid::Uuid;
 // single tcp connection for now)
 
 enum Condition {
-    Partition { node1: u16, node2: u16 },
-    Paused { node: u16 }
+    Partition {
+        node1: u16,
+        node2: u16,
+    },
+    Paused {
+        node: u16,
+    },
 }
 
 enum Event {
-    Cron { node: u16 },
-    Receive { to: SocketAddr, env: Envelope },
+    Cron {
+        node: u16,
+    },
+    Receive {
+        to: SocketAddr,
+        env: Envelope,
+    },
 }
 
 pub struct SimServer {
@@ -67,7 +77,9 @@ impl SimCluster {
         SimCluster::new_from_logs(dir, logs)
     }
 
-    pub fn new_from_logs(dir: &str, logs: Vec<InMemoryLog<Mutation>>) -> SimCluster {
+    pub fn new_from_logs(dir: &str,
+                         logs: Vec<InMemoryLog<Mutation>>)
+                         -> SimCluster {
         let mut peers = vec![];
         let mut peer_strings = vec![];
         for i in 0..logs.len() {
@@ -82,11 +94,12 @@ impl SimCluster {
         let mut toks = 0;
         for (peer, rep_log) in peers.iter().zip(logs) {
             let (tx, rx) = mpsc::channel();
-            
+
             let clock = Arc::new(TestClock::new());
 
             let state_dir = format!("_rasputin_test/{}/sim_{}",
-                                    dir, peer.port());
+                                    dir,
+                                    peer.port());
 
             // TODO(tyler) add meta
             let mut ranges = BTreeMap::new();
@@ -115,7 +128,7 @@ impl SimCluster {
         }
 
         let seed: &[_] = &[0];
-        let mut ns = SimCluster{
+        let mut ns = SimCluster {
             rng: SeedableRng::from_seed(seed),
             clock: 0,
             events: BTreeMap::new(),
@@ -125,19 +138,20 @@ impl SimCluster {
 
         // fire up the servers by queuing their cron
         for i in 0..ns.nodes.len() {
-            let time = ns.rng.gen_range(400,500);
-            ns.push_event(
-                time,
-                Event::Cron{ node: i as u16 }
-            );
+            let time = ns.rng.gen_range(400, 500);
+            ns.push_event(time, Event::Cron { node: i as u16 });
         }
         ns
     }
 
     pub fn leaders(&mut self) -> Vec<u16> {
-        self.nodes.iter()
-                  .filter(|&(id, n)| n.server.range_for_key(b"\x00").unwrap().state.is_leader())
-                  .map(|(id, n)| *id).collect()
+        self.nodes
+            .iter()
+            .filter(|&(id, n)| {
+                n.server.range_for_key(b"\x00").unwrap().state.is_leader()
+            })
+            .map(|(id, n)| *id)
+            .collect()
     }
 
     pub fn pause_node(&mut self, node: u16) -> Result<(), ()> {
@@ -150,12 +164,18 @@ impl SimCluster {
         Err(())
     }
 
-    pub fn partition_two_nodes(&mut self, node1: u16, node2: u16) -> Result<(), ()> {
+    pub fn partition_two_nodes(&mut self,
+                               node1: u16,
+                               node2: u16)
+                               -> Result<(), ()> {
         // TODO
         Err(())
     }
 
-    pub fn unpartition_two_nodes(&mut self, node1: u16, node2: u16) -> Result<(), ()> {
+    pub fn unpartition_two_nodes(&mut self,
+                                 node1: u16,
+                                 node2: u16)
+                                 -> Result<(), ()> {
         // TODO
         Err(())
     }
@@ -178,9 +198,9 @@ impl SimCluster {
             Some(event_vec) => {
                 event_vec.push(event);
                 return;
-            },
+            }
             None => (),
-        };
+        }
         self.events.insert(time, vec![event]);
     }
 
@@ -203,17 +223,23 @@ impl SimCluster {
         for event in events.unwrap() {
             match event {
                 Event::Cron{node:node} => {
-                    self.nodes.get_mut(&node).unwrap().server.range_for_key_mut(b"\x00").unwrap().cron();
-                    let time = self.rng.gen_range(400,500);
-                    self.push_event(
-                        after + time,
-                        Event::Cron{ node: node }
-                    );
-                },
+                    self.nodes
+                        .get_mut(&node)
+                        .unwrap()
+                        .server
+                        .range_for_key_mut(b"\x00")
+                        .unwrap()
+                        .cron();
+                    let time = self.rng.gen_range(400, 500);
+                    self.push_event(after + time, Event::Cron { node: node });
+                }
                 Event::Receive{to:to, env:env} => {
                     let node = self.nodes.get_mut(&to.port()).unwrap();
-                    node.server.range_for_key_mut(b"\x00").unwrap().handle_peer(env);
-                },
+                    node.server
+                        .range_for_key_mut(b"\x00")
+                        .unwrap()
+                        .handle_peer(env);
+                }
             }
         }
 
@@ -240,10 +266,11 @@ impl SimCluster {
                 let ports = self.nodes.len();
                 for port in 0..ports {
                     let arrival = self.clock + 1;
-                    self.push_event(arrival, Event::Receive {
-                        to: u16_to_socketaddr(port as u16),
-                        env: env_with_return_address.clone(),
-                    });
+                    self.push_event(arrival,
+                                    Event::Receive {
+                                        to: u16_to_socketaddr(port as u16),
+                                        env: env_with_return_address.clone(),
+                                    });
                 }
             } else {
                 let arrival = self.clock + 1;

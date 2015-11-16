@@ -15,11 +15,11 @@ use protobuf;
 use protobuf::Message;
 use uuid::Uuid;
 
-use {CollectionKind, Append, AppendRes, CliReq, CliRes, Clock, GetReq, GetRes, Mutation,
-     MutationType, PeerMsg, RealClock, RedirectRes, SetReq, SetRes, Version, CASReq, CASRes,
-     DelReq, DelRes, VoteReq, VoteRes};
-use server::{Envelope, LEADER_DURATION, State, AckedLog, InMemoryLog, LogEntry,
-             PeerID, RepPeer, TXID, Term, SendChannel, Store, KV};
+use {Append, AppendRes, CASReq, CASRes, CliReq, CliRes, Clock, CollectionKind,
+     DelReq, DelRes, GetReq, GetRes, Mutation, MutationType, PeerMsg,
+     RealClock, RedirectRes, SetReq, SetRes, Version, VoteReq, VoteRes};
+use server::{AckedLog, Envelope, InMemoryLog, KV, LEADER_DURATION, LogEntry,
+             PeerID, RepPeer, SendChannel, State, Store, TXID, Term};
 use server::traffic_cop::TrafficCop;
 
 pub struct Range<C: Clock, RE> {
@@ -75,7 +75,10 @@ impl<C: Clock, RE> Range<C, RE> {
     // }
     //
 
-    fn update_rep_peers(&mut self, peer_id: PeerID, addr: Option<SocketAddr>, tok: Token) {
+    fn update_rep_peers(&mut self,
+                        peer_id: PeerID,
+                        addr: Option<SocketAddr>,
+                        tok: Token) {
         // don't send replication traffic to self
         if self.id == peer_id {
             return;
@@ -106,7 +109,10 @@ impl<C: Clock, RE> Range<C, RE> {
         }
     }
 
-    fn handle_vote_res(&mut self, env: Envelope, peer_id: PeerID, vote_res: &VoteRes) {
+    fn handle_vote_res(&mut self,
+                       env: Envelope,
+                       peer_id: PeerID,
+                       vote_res: &VoteRes) {
         debug!("{} got response for vote request from {}",
                self.id,
                env.address.unwrap());
@@ -124,7 +130,8 @@ impl<C: Clock, RE> Range<C, RE> {
         // up on our own if we don't get a majority of unique votes
         // by the time our leader lease expires.  This protects us against
         // a single partially partitioned node from livelocking our cluster.
-        if self.state.valid_candidate(self.clock.now()) && !vote_res.get_success() {
+        if self.state.valid_candidate(self.clock.now()) &&
+           !vote_res.get_success() {
             // TODO(tyler) set term in rocksdb
             if vote_res.get_term() > self.highest_term {
                 self.highest_term = vote_res.get_term();
@@ -143,13 +150,17 @@ impl<C: Clock, RE> Range<C, RE> {
                     have: ref have,
                 } => {
                                  let mut new_have = have.clone();
-                                 if !new_have.contains(&env.tok) && vote_res.get_term() == term {
+                                 if !new_have.contains(&env.tok) &&
+                                    vote_res.get_term() == term {
                                      new_have.push(env.tok);
-                                     self.update_rep_peers(peer_id, env.address, env.tok);
+                                     self.update_rep_peers(peer_id,
+                                                           env.address,
+                                                           env.tok);
                                  }
                                  if new_have.len() >= need as usize {
                                      // we've ascended to leader!
-                                     info!("{} transitioning to leader state", self.id);
+                                     info!("{} transitioning to leader state",
+                                           self.id);
                                      new_have = vec![];
                                      let state = State::Leader {
                                          term: term,
@@ -175,7 +186,8 @@ impl<C: Clock, RE> Range<C, RE> {
                              _ => None,
                          }
                          .unwrap();
-        } else if self.state.is_leader() && self.state.valid_leader(self.clock.now()) &&
+        } else if self.state.is_leader() &&
+           self.state.valid_leader(self.clock.now()) &&
            vote_res.get_success() {
 
             self.state = match self.state.clone() {
@@ -187,14 +199,19 @@ impl<C: Clock, RE> Range<C, RE> {
                 } => {
                                  let mut new_until = until;
                                  let mut new_have = have.clone();
-                                 if !new_have.contains(&env.tok) && vote_res.get_term() == term {
+                                 if !new_have.contains(&env.tok) &&
+                                    vote_res.get_term() == term {
                                      new_have.push(env.tok);
-                                     self.update_rep_peers(peer_id, env.address, env.tok);
+                                     self.update_rep_peers(peer_id,
+                                                           env.address,
+                                                           env.tok);
                                  }
                                  if new_have.len() >= need as usize {
                                      debug!("{} leadership extended", self.id);
                                      new_have = vec![];
-                                     new_until = self.clock.now().add(*LEADER_DURATION);
+                                     new_until = self.clock
+                                                     .now()
+                                                     .add(*LEADER_DURATION);
                                  }
                                  Some(State::Leader {
                                      term: term,
@@ -222,7 +239,10 @@ impl<C: Clock, RE> Range<C, RE> {
         }
     }
 
-    fn handle_vote_req(&mut self, env: Envelope, peer_id: PeerID, vote_req: &VoteReq) {
+    fn handle_vote_req(&mut self,
+                       env: Envelope,
+                       peer_id: PeerID,
+                       vote_req: &VoteReq) {
         let mut res = PeerMsg::new();
         res.set_srvid(self.id.clone());
         let mut vote_res = VoteRes::new();
@@ -232,7 +252,8 @@ impl<C: Clock, RE> Range<C, RE> {
             // if we are this node (broadcast is naive) then all is well
             // reply to self but don't change to follower
             vote_res.set_success(true);
-        } else if self.state.valid_leader(self.clock.now()) && !self.state.following(peer_id.clone()) {
+        } else if self.state.valid_leader(self.clock.now()) &&
+           !self.state.following(peer_id.clone()) {
             // if we're already following a different node, reject
 
             warn!("got unwanted vote req from {}", peer_id);
@@ -285,7 +306,10 @@ impl<C: Clock, RE> Range<C, RE> {
         self.reply(env, ByteBuf::from_slice(&*res.write_to_bytes().unwrap()));
     }
 
-    fn handle_append(&mut self, env: Envelope, peer_id: PeerID, append: &Append) {
+    fn handle_append(&mut self,
+                     env: Envelope,
+                     peer_id: PeerID,
+                     append: &Append) {
         if self.state.is_leader() {
             warn!("Leader got append request!  This shouldn't happen.");
             return;
@@ -320,7 +344,9 @@ impl<C: Clock, RE> Range<C, RE> {
                     max_term = version.get_term();
                     max_txid = version.get_txid();
                     debug!("accepting message txid {}", version.get_txid());
-                    self.rep_log.append(version.get_term(), version.get_txid(), mutation.clone());
+                    self.rep_log.append(version.get_term(),
+                                        version.get_txid(),
+                                        mutation.clone());
                 }
 
                 append_res.set_accepted(true);
@@ -330,7 +356,8 @@ impl<C: Clock, RE> Range<C, RE> {
                 // Bump up generator for future use if we transition to leader.
                 self.max_generated_txid = max_txid;
 
-                for (term, txid) in self.rep_log.commit_up_to(append.get_last_learned_txid()) {
+                for (term, txid) in
+                    self.rep_log.commit_up_to(append.get_last_learned_txid()) {
 
                     debug!("follower learning term {} txid {}", term, txid);
                     self.learn(term, txid);
@@ -354,7 +381,10 @@ impl<C: Clock, RE> Range<C, RE> {
         self.reply(env, ByteBuf::from_slice(&*res.write_to_bytes().unwrap()));
     }
 
-    fn handle_append_res(&mut self, env: Envelope, peer_id: PeerID, append_res: &AppendRes) {
+    fn handle_append_res(&mut self,
+                         env: Envelope,
+                         peer_id: PeerID,
+                         append_res: &AppendRes) {
         // verify that we are leading
         if !self.state.is_leader() {
             return;
@@ -364,17 +394,21 @@ impl<C: Clock, RE> Range<C, RE> {
         let mut accepted = vec![];
         match self.rep_peers.get_mut(&peer_id) {
             Some(ref mut rep_peer) => {
-                rep_peer.last_accepted_term = append_res.get_last_accepted_term();
-                rep_peer.last_accepted_txid = append_res.get_last_accepted_txid();
+                rep_peer.last_accepted_term =
+                    append_res.get_last_accepted_term();
+                rep_peer.last_accepted_txid =
+                    append_res.get_last_accepted_txid();
 
                 // reset max sent if we need to backfill
                 if !append_res.get_accepted() {
-                    rep_peer.max_sent_txid = append_res.get_last_accepted_txid();
+                    rep_peer.max_sent_txid =
+                        append_res.get_last_accepted_txid();
                 }
 
                 // see if we can mark any updates as accepted
                 accepted = self.rep_log
-                               .ack_up_to(append_res.get_last_accepted_txid(), peer_id);
+                               .ack_up_to(append_res.get_last_accepted_txid(),
+                                          peer_id);
             }
             None => error!("got AppendRes for non-existent peer!"),
         }
@@ -385,17 +419,24 @@ impl<C: Clock, RE> Range<C, RE> {
     }
 
     pub fn handle_peer(&mut self, env: Envelope) {
-        let peer_msg: PeerMsg = protobuf::parse_from_bytes(env.msg.bytes()).unwrap();
+        let peer_msg: PeerMsg = protobuf::parse_from_bytes(env.msg.bytes())
+                                    .unwrap();
         let peer_id = peer_msg.get_srvid();
 
         if peer_msg.has_vote_res() {
-            self.handle_vote_res(env, peer_id.to_string(), peer_msg.get_vote_res());
+            self.handle_vote_res(env,
+                                 peer_id.to_string(),
+                                 peer_msg.get_vote_res());
         } else if peer_msg.has_vote_req() {
-            self.handle_vote_req(env, peer_id.to_string(), peer_msg.get_vote_req());
+            self.handle_vote_req(env,
+                                 peer_id.to_string(),
+                                 peer_msg.get_vote_req());
         } else if peer_msg.has_append() {
             self.handle_append(env, peer_id.to_string(), peer_msg.get_append());
         } else if peer_msg.has_append_res() {
-            self.handle_append_res(env, peer_id.to_string(), peer_msg.get_append_res());
+            self.handle_append_res(env,
+                                   peer_id.to_string(),
+                                   peer_msg.get_append_res());
         } else {
             error!("got unhandled peer message! {:?}", peer_msg);
         }
@@ -456,12 +497,14 @@ impl<C: Clock, RE> Range<C, RE> {
             MutationType::KVSET => {
                 info!("processing set!");
                 let mut set_res = SetRes::new();
-                match self.store.put(mutation.get_key(), mutation.get_value(), txid) {
+                match self.store
+                          .put(mutation.get_key(), mutation.get_value(), txid) {
                     Ok(_) => set_res.set_success(true),
                     Err(e) => {
                         error!("Operational problem encountered: {}", e);
                         set_res.set_success(false);
-                        set_res.set_err("Operational problem encountered".to_string());
+                        set_res.set_err("Operational problem encountered"
+                                            .to_string());
                     }
                 }
                 res.set_set(set_res);
@@ -470,18 +513,26 @@ impl<C: Clock, RE> Range<C, RE> {
                 let mut cas_res = CASRes::new();
                 match self.store.get_last(mutation.get_key()) {
                     Ok(Some(old_val)) => {
-                        if mutation.has_old_value() && *old_val == *mutation.get_old_value() {
+                        if mutation.has_old_value() &&
+                           *old_val == *mutation.get_old_value() {
 
                             // compare succeeded, let's try to set
-                            match self.store.put(mutation.get_key(), mutation.get_value(), txid) {
+                            match self.store.put(mutation.get_key(),
+                                                 mutation.get_value(),
+                                                 txid) {
                                 Ok(_) => {
                                     cas_res.set_success(true);
-                                    cas_res.set_value(mutation.get_value().to_vec());
+                                    cas_res.set_value(mutation.get_value()
+                                                              .to_vec());
                                 }
                                 Err(e) => {
-                                    error!("Operational problem encountered: {}", e);
+                                    error!("Operational problem encountered: \
+                                            {}",
+                                           e);
                                     cas_res.set_success(false);
-                                    cas_res.set_err("Operational problem encountered".to_string());
+                                    cas_res.set_err("Operational problem \
+                                                     encountered"
+                                                        .to_string());
                                     cas_res.set_value(old_val.to_vec());
                                 }
                             }
@@ -493,15 +544,22 @@ impl<C: Clock, RE> Range<C, RE> {
                     }
                     Ok(None) => {
                         if !mutation.has_old_value() {
-                            match self.store.put(mutation.get_key(), mutation.get_value(), txid) {
+                            match self.store.put(mutation.get_key(),
+                                                 mutation.get_value(),
+                                                 txid) {
                                 Ok(_) => {
                                     cas_res.set_success(true);
-                                    cas_res.set_value(mutation.get_value().to_vec());
+                                    cas_res.set_value(mutation.get_value()
+                                                              .to_vec());
                                 }
                                 Err(e) => {
-                                    error!("Operational problem encountered: {}", e);
+                                    error!("Operational problem encountered: \
+                                            {}",
+                                           e);
                                     cas_res.set_success(false);
-                                    cas_res.set_err(format!("Operational problem encountered: {}",
+                                    cas_res.set_err(format!("Operational \
+                                                             problem encount\
+                                                             ered: {}",
                                                             e));
                                 }
                             }
@@ -513,7 +571,9 @@ impl<C: Clock, RE> Range<C, RE> {
                     Err(e) => {
                         cas_res.set_success(false);
                         error!("Operational problem encountered: {}", e);
-                        cas_res.set_err(format!("Operational problem encountered: {}", e));
+                        cas_res.set_err(format!("Operational problem \
+                                                 encountered: {}",
+                                                e));
                     }
                 }
                 cas_res.set_txid(self.rep_log.last_learned_txid());
@@ -534,7 +594,9 @@ impl<C: Clock, RE> Range<C, RE> {
                     Err(e) => {
                         error!("Operational problem encountered: {}", e);
                         del_res.set_success(false);
-                        del_res.set_err(format!("Operational problem encountered: {}", e));
+                        del_res.set_err(format!("Operational problem \
+                                                 encountered: {}",
+                                                e));
                     }
                 }
                 res.set_del(del_res);
@@ -580,11 +642,14 @@ impl<C: Clock, RE> Range<C, RE> {
             // 2. that the last term the vote requestor has learned something
             //    is the same as ours, and the requestor has accepted at least
             //    as many mutations within that term as we have
-            if vote_req.get_last_learned_term() > self.rep_log.last_learned_term() {
+            if vote_req.get_last_learned_term() >
+               self.rep_log.last_learned_term() {
                 // case 1
                 true
-            } else if vote_req.get_last_learned_term() == self.rep_log.last_learned_term() &&
-               vote_req.get_last_accepted_txid() >= self.rep_log.last_accepted_txid() {
+            } else if vote_req.get_last_learned_term() ==
+               self.rep_log.last_learned_term() &&
+               vote_req.get_last_accepted_txid() >=
+               self.rep_log.last_accepted_txid() {
                 // case 2
                 true
             } else {
@@ -609,7 +674,8 @@ impl<C: Clock, RE> Range<C, RE> {
         if mutations.len() > 0 {
             for mutation in mutations {
                 let txid = mutation.get_version().get_txid();
-                self.rep_log.append(mutation.get_version().get_term(), txid, mutation);
+                self.rep_log
+                    .append(mutation.get_version().get_term(), txid, mutation);
 
                 // this should only be learned on single replica collections
                 let accepted = self.rep_log.ack_up_to(txid, self.id.clone());
@@ -663,7 +729,8 @@ impl<C: Clock, RE> Range<C, RE> {
                self.rep_log.last_accepted_txid(),
                self.rep_log.last_learned_txid());
         debug!("rep log unaccepted len: {:?}",
-               self.rep_log.last_accepted_txid() - self.rep_log.last_learned_txid());
+               self.rep_log.last_accepted_txid() -
+               self.rep_log.last_learned_txid());
         debug!("peers: {:?}", peer_ids);
     }
 
@@ -676,7 +743,8 @@ impl<C: Clock, RE> Range<C, RE> {
     }
 
     fn handle_cli(&mut self, req: Envelope) {
-        let cli_req: CliReq = protobuf::parse_from_bytes(req.msg.bytes()).unwrap();
+        let cli_req: CliReq = protobuf::parse_from_bytes(req.msg.bytes())
+                                  .unwrap();
         let mut res = CliRes::new();
         res.set_req_id(cli_req.get_req_id());
         if !self.state.is_leader() {
@@ -701,7 +769,8 @@ impl<C: Clock, RE> Range<C, RE> {
                 redirect_res.set_address(format!("{:?}", leader_address));
             } else {
                 redirect_res.set_success(false);
-                redirect_res.set_err("No leader has been elected yet".to_string());
+                redirect_res.set_err("No leader has been elected yet"
+                                         .to_string());
             }
             res.set_redirect(redirect_res);
         } else if cli_req.has_get() {
@@ -719,7 +788,8 @@ impl<C: Clock, RE> Range<C, RE> {
                 Err(e) => {
                     error!("Operational problem encountered: {}", e);
                     get_res.set_success(false);
-                    get_res.set_err("Operational problem encountered".to_string());
+                    get_res.set_err("Operational problem encountered"
+                                        .to_string());
                 }
             }
             get_res.set_txid(self.rep_log.last_learned_txid());
