@@ -35,7 +35,8 @@ pub struct Range<C: Clock, RE> {
     pub max_generated_txid: TXID,
     pub highest_term: Term,
     pub state: State,
-    pub rpc_tx: Box<SendChannel<Envelope, RE> + Send>,
+    pub rpc_tx: Box<SendChannel<Envelope, RE> + Send + Copy>,
+    pub pending: BTreeMap<TXID, (Envelope, u64)>,
 }
 
 unsafe impl<C: Clock, RE> Sync for Range<C, RE>{}
@@ -595,11 +596,11 @@ impl<C: Clock, RE> Range<C, RE> {
     }
 
     fn peer_broadcast(&mut self, msg: ByteBuf) {
-        for (id, peer) in self.rep_peers {
+        for (id, peer) in self.rep_peers.iter() {
             self.rpc_tx.send_msg(Envelope {
                 address: peer.addr,
                 tok: peer.tok,
-                msg: msg,
+                msg: ByteBuf::from_slice(&*msg.bytes()),
             });
         }
     }

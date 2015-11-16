@@ -6,7 +6,7 @@ use std::process;
 use rasputin::Client;
 use rasputin::server::Server;
 use rasputin::logging;
-use rasputin::server::{Envelope, LEADER_DURATION, PEER_BROADCAST, State};
+use rasputin::server::{Envelope, LEADER_DURATION, State};
 use rasputin::RealClock;
 use cluster::{SimCluster, SimServer};
 use self::log::LogLevel;

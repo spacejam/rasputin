@@ -148,10 +148,12 @@ impl Handler for TrafficCop {
             match token {
                 SERVER_PEERS => panic!("received writable for SERVER_PEERS"),
                 SERVER_CLIENTS => panic!("received writable for token SERVER_CLIENTS"),
-                peer if peer.as_usize() > 1 && peer.as_usize() <= 128 =>
-                    self.peer_handler.conn_writable(event_loop, peer),
-                cli if cli.as_usize() > 128 && cli.as_usize() <= 4096 =>
-                    self.cli_handler.conn_writable(event_loop, cli),
+                peer if peer.as_usize() > 1 && peer.as_usize() <= 128 => {
+                    self.peer_handler.conn_writable(event_loop, peer);
+                },
+                cli if cli.as_usize() > 128 && cli.as_usize() <= 4096 => {
+                    self.cli_handler.conn_writable(event_loop, cli);
+                },
                 t => panic!("received writable for out-of-range token: {}", t.as_usize()),
             }
         }

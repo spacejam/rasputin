@@ -12,9 +12,8 @@ use std::sync::mpsc::{self, Sender, Receiver, SendError};
 use self::rand::{StdRng, SeedableRng, Rng};
 use self::bytes::{Buf, ByteBuf};
 use self::mio::Token;
-use rasputin::server::rocksdb as db;
-use rasputin::server::{Server, Envelope, State, Peer, InMemoryLog,
-                       LEADER_DURATION, PEER_BROADCAST};
+use rasputin::server::{Server, Range, KV, Envelope, State, Peer, InMemoryLog,
+                       LEADER_DURATION};
 use rasputin::{Clock, TestClock, Mutation};
 use self::uuid::Uuid;
 
@@ -88,20 +87,19 @@ impl SimCluster {
 
             let state_dir = format!("_rasputin_test/{}/sim_{}",
                                     dir, peer.port());
+
+            // TODO(tyler) add meta
+            let mut ranges = BTreeMap::new();
+            let kv = Arc::new(KV::new(state_dir.clone()));
+
             let server = Server {
                 clock: clock.clone(),
                 peer_port: peer.port(),
                 cli_port: 65535 - peer.port(),
                 id: Uuid::new_v4().to_string(),
                 rpc_tx: Box::new(tx),
-                max_generated_txid: 0,
-                highest_term: 0,
-                state: State::Init,
-                db: db::new(state_dir.clone()),
-                rep_log: Box::new(rep_log),
-                peers: peer_strings.clone(),
-                rep_peers: BTreeMap::new(),
-                pending: BTreeMap::new(),
+                ranges: ranges,
+                kv: kv,
             };
 
             nodes.insert(peer.port(), SimServer {
@@ -136,9 +134,9 @@ impl SimCluster {
         ns
     }
 
-    pub fn leaders(&self) -> Vec<u16> {
+    pub fn leaders(&mut self) -> Vec<u16> {
         self.nodes.iter()
-                  .filter(|&(id, n)| n.server.state.is_leader())
+                  .filter(|&(id, n)| n.server.range_for_key(b"\x00").unwrap().state.is_leader())
                   .map(|(id, n)| *id).collect()
     }
 
@@ -205,7 +203,7 @@ impl SimCluster {
         for event in events.unwrap() {
             match event {
                 Event::Cron{node:node} => {
-                    self.nodes.get_mut(&node).unwrap().server.cron();
+                    self.nodes.get_mut(&node).unwrap().server.range_for_key_mut(b"\x00").unwrap().cron();
                     let time = self.rng.gen_range(400,500);
                     self.push_event(
                         after + time,
@@ -214,7 +212,7 @@ impl SimCluster {
                 },
                 Event::Receive{to:to, env:env} => {
                     let node = self.nodes.get_mut(&to.port()).unwrap();
-                    node.server.handle_peer(env);
+                    node.server.range_for_key_mut(b"\x00").unwrap().handle_peer(env);
                 },
             }
         }

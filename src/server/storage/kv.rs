@@ -1,9 +1,11 @@
+use std::iter::{Iterator, ExactSizeIterator, IntoIterator, FromIterator};
 use std::io::{self, Error, ErrorKind};
 use std::mem;
 
-use rocksdb::{DB, Direction, Writable};
+use rocksdb::{DB, Direction, Writable, SubDBIterator};
 use rocksdb::Options as RocksDBOptions;
 
+use server::TXID;
 use server::storage::{Store, RetentionPolicy};
 
 pub struct KV {
@@ -40,14 +42,12 @@ impl KV {
 unsafe impl Sync for KV{}
 
 impl Store for KV {
-    fn put(&self, k: &[u8], v: &[u8], version: u64) -> io::Result<()> {
-        let mut new_k = k.to_vec();
-        unsafe {
-            for i in mem::transmute::<u64, [u8; 8]>(version.to_be()).iter() {
-                new_k.push(*i)
-            }
+    fn put(&self, k: &[u8], v: &[u8], vsn: TXID) -> io::Result<()> {
+        let vsn_k = concat_vsn(k, vsn);
+        match self.db.put(&*vsn_k, v) {
+            Ok(_) => Ok(()),
+            Err(e) => Err((Error::new(ErrorKind::Other, e))),
         }
-        self.db.put(&*new_k, v);
     }
 
     fn get_last(&self, k: &[u8]) -> io::Result<Option<Vec<u8>>> {
@@ -63,10 +63,13 @@ impl Store for KV {
         Ok(None)
     }
 
-    fn scan_from(&self, k: Vec<u8>, i: u64) -> Iterator<Item = Vec<u8>> {
+    fn scan_from(&self, k: &[u8], vsn: TXID, n: usize) -> Vec<(Box<[u8]>, Box<[u8]>)> {
+        let vsn_k = concat_vsn(k, vsn);
         let mut iter = self.db.iterator();
-        iter.from(b"k", Direction::forward)
+        iter.from(&*vsn_k, Direction::forward)
             .take_while(|kv| kv.0.len() > 8 && kv.0.starts_with(&*k))
+            .take(n)
+            .collect()
     }
 
     fn delete(&self, k: &[u8]) -> io::Result<()> {
@@ -81,7 +84,17 @@ impl Store for KV {
     }
 }
 
-fn upper_bound<'a>(k: &[u8]) -> Vec<u8> {
+fn concat_vsn<'a>(k: &[u8], vsn: TXID) -> Vec<u8> {
+    let mut vsn_k = k.to_vec();
+    unsafe {
+        for i in mem::transmute::<u64, [u8; 8]>(vsn.to_be()).iter() {
+            vsn_k.push(*i)
+        }
+    }
+    vsn_k
+}
+
+fn upper_bound(k: &[u8]) -> Vec<u8> {
     let mut rk = k.to_vec();
     if rk.len() == 0 || *rk.last().unwrap() == 0xff {
         rk.push(0x00);

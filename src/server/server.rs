@@ -28,8 +28,7 @@ pub struct Server<C: Clock, RE> {
     pub cli_port: u16,
     pub id: PeerID,
     pub rpc_tx: Box<SendChannel<Envelope, RE> + Send>,
-    pub ranges: BTreeMap<Vec<u8>, Box<Range<C, RE>>>,
-    pub pending: BTreeMap<TXID, (Envelope, u64)>,
+    pub ranges: BTreeMap<Vec<u8>, Range<C, RE>>,
     pub kv: Arc<KV>,
 }
 
@@ -82,7 +81,6 @@ impl<C: Clock, RE> Server<C, RE> {
             cli_port: cli_port,
             id: Uuid::new_v4().to_string(), // TODO(tyler) read from rocksdb
             rpc_tx: Box::new(rpc_tx),
-            pending: BTreeMap::new(),
             kv: Arc::new(KV::new(storage_dir)),
             ranges: BTreeMap::new(),
         }));
@@ -134,7 +132,7 @@ impl<C: Clock, RE> Server<C, RE> {
                     clock.sleep_ms(rng.gen_range(400, 500));
                     match srv3.lock() {
                         Ok(mut srv) => {
-                            for (_, range) in srv.ranges {
+                            for (_, range) in srv.ranges.iter_mut() {
                                 range.cron()
                             }
                         }
@@ -154,17 +152,49 @@ impl<C: Clock, RE> Server<C, RE> {
         panic!("A worker thread unexpectedly exited! Shutting down.");
     }
 
+    pub fn range_for_key<'a>(&self, key: &[u8]) -> Option<&Range<C, RE>> {
+        let ranges: Vec<&Range<C, RE>> = self.ranges.values()
+                                            .filter(|r| &*r.lower <= key && &*r.upper > key)
+                                            .collect();
+        if ranges.len() == 1 {
+            Some(ranges[0])
+        } else {
+            None
+        }
+    }
+
+    pub fn range_for_key_mut(&mut self, key: &[u8]) -> Option<&mut Range<C, RE>> {
+        let key: Vec<u8> = {
+            let mut ranges: Vec<&Vec<u8>> = self.ranges.iter_mut()
+                                                .filter(|&(k, ref r)| &*r.lower <= key && &*r.upper > key)
+                                                .map(|(k, _)| k)
+                                                .collect();
+            if ranges.len() == 1 {
+                ranges[0].clone()
+            } else {
+                error!("Found several matching range keys in range_for_key_mut!");
+                return None;
+            }
+        };
+        self.ranges.get_mut(&*key)
+    }
+
     pub fn handle_peer(&mut self, env: Envelope) {
         let peer_msg: PeerMsg = protobuf::parse_from_bytes(env.msg.bytes()).unwrap();
-        self.ranges.get(peer_msg.get_range_prefix()).unwrap().handle_peer(env);
+        self.ranges.get_mut(peer_msg.get_range_prefix()).unwrap().handle_peer(env);
     }
+
     fn handle_cli(&mut self, env: Envelope) {
         let cli_req: CliReq = protobuf::parse_from_bytes(env.msg.bytes()).unwrap();
         let key = cli_req.get_key();
-        let ranges = self.ranges.keys().filter(|k| key.starts_with(k)).collect();
+        let ranges: Vec<Vec<u8>> = self.ranges.keys()
+                                              .cloned()
+                                              .filter(|k| key.starts_with(k))
+                                              .map(|k| k)
+                                              .collect();
         if ranges.len() == 0 {
             // TODO(tyler) reply with range-aware redirect
         }
-        self.ranges.get(ranges.last().unwrap()).unwrap().handle_peer(env);
+        self.ranges.get_mut(ranges.last().unwrap()).unwrap().handle_peer(env);
     }
 }

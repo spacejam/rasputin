@@ -31,8 +31,8 @@ fn election_safety() {
     for i in 0..3000 {
         sim.step();
         for (id, n) in sim.nodes.iter() {
-            if n.server.state.is_leader() {
-                let term = n.server.state.term().unwrap();
+            if n.server.range_for_key(b"\x00").unwrap().state.is_leader() {
+                let term = n.server.range_for_key(b"\x00").unwrap().state.term().unwrap();
                 let tok = n.tok.as_usize();
                 assert!(*leaders.entry(term).or_insert(tok) == tok);
             }
@@ -47,11 +47,11 @@ fn stable_leader_with_no_faults() {
     for i in 0..3000 {
         sim.step();
         for (id, n) in sim.nodes.iter() {
-             match n.server.state.term() {
+             match n.server.range_for_key(b"\x00").unwrap().state.term() {
                  Some(term) => {
-                     if leader.is_none() && n.server.state.is_leader() {
+                     if leader.is_none() && n.server.range_for_key(b"\x00").unwrap().state.is_leader() {
                          leader = Some(term);
-                     } else if n.server.state.is_leader() {
+                     } else if n.server.range_for_key(b"\x00").unwrap().state.is_leader() {
                          assert!(leader.unwrap() == term);
                      }
                  },
