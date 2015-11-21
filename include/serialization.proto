@@ -147,3 +147,32 @@ message PeerMsg {
   optional Append append = 4;
   optional AppendRes append_res = 5;
 }
+
+//
+// Meta
+//
+
+enum CollectionType {
+  KV = 1;
+  LOG = 2;
+  OBJECT = 3;
+  TIMESERIES = 4;
+}
+
+message Collection {
+  required bytes prefix = 1;
+  required CollectionType type = 2;
+  required string name = 3;
+}
+
+message Range {
+  required bytes lower = 1;
+  required bytes upper = 2;
+  required CollectionType type = 3;
+  required string name = 4;
+}
+
+message Meta {
+  repeated Collection collections = 1;
+  repeated Range ranges = 2;
+}
