@@ -159,10 +159,20 @@ enum CollectionType {
   TIMESERIES = 4;
 }
 
+message RetentionPolicy {
+  required uint64 hours = 1;
+}
+
 message Collection {
   required bytes prefix = 1;
   required CollectionType type = 2;
   required string name = 3;
+  optional RetentionPolicy retention_policy = 4;
+}
+
+message Replica {
+  required string address = 1;
+  required bytes id = 2;
 }
 
 message Range {
@@ -170,6 +180,7 @@ message Range {
   required bytes upper = 2;
   required CollectionType type = 3;
   required string name = 4;
+  repeated Replica replicas = 5;
 }
 
 message Meta {
