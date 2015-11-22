@@ -168,6 +168,7 @@ message Collection {
   required CollectionType type = 2;
   required string name = 3;
   optional RetentionPolicy retention_policy = 4;
+  optional uint32 replication_factor = 5;
 }
 
 message Replica {
