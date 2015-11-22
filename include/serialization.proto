@@ -140,17 +140,20 @@ message AppendRes {
 
 // server<->server top-level api
 message PeerMsg {
-  required bytes range_prefix = 6;
-  required string srvid = 1;
-  optional VoteReq vote_req = 2;
-  optional VoteRes vote_res = 3;
-  optional Append append = 4;
-  optional AppendRes append_res = 5;
+  required bytes range_prefix = 1;
+  required string srvid = 2;
+  optional VoteReq vote_req = 3;
+  optional VoteRes vote_res = 4;
+  optional Append append = 5;
+  optional AppendRes append_res = 6;
+  optional CreateMeta create_meta = 7;
 }
 
 //
 // Meta
 //
+
+message CreateMeta {}
 
 enum CollectionType {
   KV = 1;
