@@ -65,7 +65,9 @@ fn main() {
     if args.flag_initialize {
         Server::<RealClock,
                  Result<(),
-                 SendError<Envelope>>>::initialize(storage_dir, peer_port, seed_peers);
+                 SendError<Envelope>>>::initialize_meta(storage_dir,
+                                                        peer_port,
+                                                        seed_peers);
     } else {
         Server::<RealClock,
                  Result<(),

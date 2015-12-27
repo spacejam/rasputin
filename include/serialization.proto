@@ -180,20 +180,12 @@ message RetentionPolicy {
   required uint64 hours = 1;
 }
 
-message Collection {
-  required bytes prefix = 1;
-  required CollectionType type = 2;
-  required string name = 3;
-  optional RetentionPolicy retention_policy = 4;
-  optional uint32 replication_factor = 5;
-}
-
 message Replica {
   required string address = 1;
   required bytes id = 2;
 }
 
-message Range {
+message RangeMeta {
   required bytes lower = 1;
   required bytes upper = 2;
   required CollectionType type = 3;
@@ -201,7 +193,15 @@ message Range {
   repeated Replica replicas = 5;
 }
 
+message Collection {
+  required bytes prefix = 1;
+  required CollectionType type = 2;
+  required string name = 3;
+  optional RetentionPolicy retention_policy = 4;
+  optional uint32 replication_factor = 5;
+  repeated RangeMeta ranges = 6;
+}
+
 message Meta {
   repeated Collection collections = 1;
-  repeated Range ranges = 2;
 }

@@ -101,7 +101,7 @@ fn concat_vsn<'a>(k: &[u8], vsn: TXID) -> Vec<u8> {
     vsn_k
 }
 
-fn upper_bound(k: &[u8]) -> Vec<u8> {
+pub fn upper_bound(k: &[u8]) -> Vec<u8> {
     let mut rk = k.to_vec();
     if rk.len() == 0 || *rk.last().unwrap() == 0xff {
         rk.push(0x00);

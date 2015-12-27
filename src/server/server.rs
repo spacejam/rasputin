@@ -7,12 +7,16 @@ use std::thread;
 use bytes::Buf;
 use mio::EventLoop;
 use rand::{Rng, thread_rng};
-use protobuf;
+use protobuf::{self, Message};
 use uuid::Uuid;
 
+use constants;
+use serialization::{Meta, RangeMeta, Replica, Collection, RetentionPolicy,
+                    CollectionType};
 use {CliReq, Clock, PeerMsg, RealClock};
 use server::{Envelope, KV, PeerID, Range, SendChannel};
 use server::traffic_cop::TrafficCop;
+use server::storage::kv::upper_bound;
 
 pub struct Server<C: Clock, RE> {
     pub clock: Arc<C>,
@@ -27,10 +31,38 @@ pub struct Server<C: Clock, RE> {
 unsafe impl<C: Clock, RE> Sync for Server<C, RE>{}
 
 impl<C: Clock, RE> Server<C, RE> {
-    pub fn initialize(storage_dir: String,
-                      peer_port: u16,
-                      peers: Vec<String>) {
-        println!("initializing");
+    pub fn initialize_meta(storage_dir: String,
+                           peer_port: u16,
+                           peers: Vec<String>) {
+
+        warn!("initializing meta with seeds {:?}", peers);
+
+        let replicas = peers.iter().map(|p| {
+            let mut replica = Replica::new();
+            replica.set_address(p.clone());
+            // TODO(tyler) get this some deterministic / non-buggy way?
+            replica.set_id(Uuid::new_v4().as_bytes().to_vec());
+            replica
+        }).collect();
+
+        let mut range = RangeMeta::new();
+        range.set_lower(constants::META.to_vec());
+        range.set_upper(upper_bound(constants::META));
+        range.set_field_type(CollectionType::KV);
+        range.set_name("META".to_string());
+        range.set_replicas(protobuf::RepeatedField::from_vec(replicas));
+
+        let mut collection = Collection::new();
+        collection.set_prefix(constants::META.to_vec());
+        collection.set_name("META".to_string());
+        collection.set_field_type(CollectionType::KV);
+        collection.set_ranges(protobuf::RepeatedField::from_vec(vec![range]));
+        collection.set_replication_factor(3);
+
+        let mut meta = Meta::new();
+        meta.set_collections(protobuf::RepeatedField::from_vec(vec![collection]));
+
+        // TODO(tyler) persist range
     }
 
     pub fn run(storage_dir: String,
