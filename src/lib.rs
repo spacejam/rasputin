@@ -1,9 +1,10 @@
 #![crate_id = "rasputin"]
 #![crate_type = "lib"]
 
-pub use serialization::{Append, AppendRes, CASReq, CASRes, CliReq, CliRes, GetReq, GetRes,
-                        Mutation, MutationType, PeerMsg, RedirectRes, SetReq, SetRes, Version,
-                        VoteReq, VoteRes, WatchReq, WatchRes, DelReq, DelRes};
+pub use serialization::{Append, AppendRes, CASReq, CASRes, CliReq, CliRes,
+                        DelReq, DelRes, GetReq, GetRes, Mutation,
+                        MutationType, PeerMsg, RedirectRes, SetReq, SetRes,
+                        Version, VoteReq, VoteRes, WatchReq, WatchRes};
 
 pub use codec::{Codec, Framed};
 

@@ -56,7 +56,8 @@ impl Codec<ByteBuf, ByteBuf> for Framed {
                 }
 
                 let sz_buf = self.sz_buf.bytes();
-                let size = array_to_usize([sz_buf[0], sz_buf[1], sz_buf[2], sz_buf[3]]);
+                let size = array_to_usize([sz_buf[0], sz_buf[1], sz_buf[2],
+                                           sz_buf[3]]);
                 self.msg = unsafe {
                     // manually create bytebuf so we can have exact cap and lim
                     Some(ByteBuf::from_mem_ref(alloc::heap(size.next_power_of_two()),

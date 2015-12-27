@@ -10,11 +10,11 @@ use mio::Token;
 use protobuf;
 use protobuf::Message;
 
-use {Append, AppendRes, CASRes, CliReq, CliRes, Clock, CollectionKind,
-     DelRes, GetRes, Mutation, MutationType, PeerMsg,
-     RedirectRes, SetRes, Version, VoteReq, VoteRes};
-use server::{AckedLog, Envelope, LEADER_DURATION,
-             PeerID, RepPeer, SendChannel, State, Store, TXID, Term};
+use {Append, AppendRes, CASRes, CliReq, CliRes, Clock, CollectionKind, DelRes,
+     GetRes, Mutation, MutationType, PeerMsg, RedirectRes, SetRes, Version,
+     VoteReq, VoteRes};
+use server::{AckedLog, Envelope, LEADER_DURATION, PeerID, RepPeer,
+             SendChannel, State, Store, TXID, Term};
 
 pub struct Range<C: Clock, RE> {
     pub id: PeerID,
@@ -183,38 +183,39 @@ impl<C: Clock, RE> Range<C, RE> {
         } else if self.state.is_leader() &&
            self.state.valid_leader(self.clock.now()) &&
            vote_res.get_success() {
-               self.state = match self.state.clone() {
-                   State::Leader{
+            self.state = match self.state.clone() {
+                             State::Leader{
                        term,
                        until,
                        need,
                        ref have
                    } => {
-                       let mut new_until = until;
-                       let mut new_have = have.clone();
-                       if !new_have.contains(&env.tok) &&
-                           vote_res.get_term() == term {
-                               new_have.push(env.tok);
-                               self.update_rep_peers(peer_id,
-                                                     env.address,
-                                                     env.tok);
-                       }
-                       if new_have.len() >= need as usize {
-                           debug!("{} leadership extended", self.id);
-                           new_have = vec![];
-                           new_until = self.clock
-                               .now()
-                               .add(*LEADER_DURATION);
-                       }
-                       Some(State::Leader {
-                           term: term,
-                           until: new_until,
-                           need: need,
-                           have: new_have,
-                       })
-                   }
-                   _ => None,
-               }.unwrap()
+                                 let mut new_until = until;
+                                 let mut new_have = have.clone();
+                                 if !new_have.contains(&env.tok) &&
+                                    vote_res.get_term() == term {
+                                     new_have.push(env.tok);
+                                     self.update_rep_peers(peer_id,
+                                                           env.address,
+                                                           env.tok);
+                                 }
+                                 if new_have.len() >= need as usize {
+                                     debug!("{} leadership extended", self.id);
+                                     new_have = vec![];
+                                     new_until = self.clock
+                                                     .now()
+                                                     .add(*LEADER_DURATION);
+                                 }
+                                 Some(State::Leader {
+                                     term: term,
+                                     until: new_until,
+                                     need: need,
+                                     have: new_have,
+                                 })
+                             }
+                             _ => None,
+                         }
+                         .unwrap()
         } else if !vote_res.get_success() {
             warn!("{} received vote nack from {}", self.id, peer_id);
         } else {
@@ -257,15 +258,16 @@ impl<C: Clock, RE> Range<C, RE> {
             // if we're already following this node, keed doing so
             debug!("{} extending followership of {}", self.id, peer_id);
             self.state = match self.state {
-                State::Follower{term, ref id, leader_addr, tok, ..} => Some(State::Follower {
+                             State::Follower{term, ref id, leader_addr, tok, ..} => Some(State::Follower {
                     term: term,
                     id: id.clone(),
                     leader_addr: leader_addr,
                     until: self.clock.now().add(*LEADER_DURATION),
                     tok: tok,
                 }),
-                _ => None,
-            }.unwrap();
+                             _ => None,
+                         }
+                         .unwrap();
             vote_res.set_success(true);
         } else if self.should_grant_vote(vote_req) {
             self.highest_term = vote_req.get_term();
@@ -740,9 +742,11 @@ impl<C: Clock, RE> Range<C, RE> {
             // sets the return address.
             if self.state.is_follower() {
                 let leader_address = match self.state {
-                    State::Follower{leader_addr, ..} => Some(leader_addr),
-                    _ => None,
-                }.unwrap();
+                                         State::Follower{leader_addr, ..} =>
+                                             Some(leader_addr),
+                                         _ => None,
+                                     }
+                                     .unwrap();
                 redirect_res.set_success(true);
                 redirect_res.set_address(format!("{:?}", leader_address));
             } else {

@@ -4,7 +4,8 @@ use std::io::prelude::Write;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use log::{self, LogLevel, LogLevelFilter, LogMetadata, LogRecord, SetLoggerError};
+use log::{self, LogLevel, LogLevelFilter, LogMetadata, LogRecord,
+          SetLoggerError};
 use time;
 
 struct StdoutLogger {
@@ -38,12 +39,15 @@ impl FileLogger {
         let ospath = Path::new(path).parent();
         if ospath.is_none() {
             return Err(Error::new(ErrorKind::Other,
-                                  format!("Failed to use log directory: {}", path)));
+                                  format!("Failed to use log directory: {}",
+                                          path)));
         }
 
         match fs::create_dir_all(&ospath.unwrap()) {
             Err(e) => return Err(Error::new(ErrorKind::Other,
-                                            format!("Failed to create log directory: {}", e))),
+                                            format!("Failed to create log \
+                                                     directory: {}",
+                                                    e))),
             Ok(_) => (),
         }
 
@@ -86,7 +90,9 @@ impl log::Log for FileLogger {
     }
 }
 
-pub fn init_logger(path: Option<String>, level: LogLevel) -> Result<(), SetLoggerError> {
+pub fn init_logger(path: Option<String>,
+                   level: LogLevel)
+                   -> Result<(), SetLoggerError> {
     let logger: Box<log::Log> = match path {
         Some(p) => Box::new(FileLogger::new(p.trim_left(), level).unwrap()),
         None => Box::new(StdoutLogger { level: level }),

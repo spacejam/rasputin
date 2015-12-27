@@ -9,8 +9,8 @@ use protobuf::{self, Message};
 use mio::{TryRead, TryWrite};
 use mio::tcp::TcpStream;
 
-use {CliReq, CliRes, GetReq, GetRes, RangeBounds, RedirectRes, SetReq, SetRes, Version, CASReq,
-     CASRes, DelReq, DelRes};
+use {CASReq, CASRes, CliReq, CliRes, DelReq, DelRes, GetReq, GetRes,
+     RangeBounds, RedirectRes, SetReq, SetRes, Version};
 use codec::{self, Codec, Framed};
 
 pub struct Client {
@@ -35,7 +35,10 @@ impl Client {
         self.req_counter
     }
 
-    pub fn set<'a>(&mut self, key: &'a [u8], value: &'a [u8]) -> io::Result<SetRes> {
+    pub fn set<'a>(&mut self,
+                   key: &'a [u8],
+                   value: &'a [u8])
+                   -> io::Result<SetRes> {
 
         let mut set = SetReq::new();
         set.set_value(value.to_vec());
@@ -125,8 +128,9 @@ impl Client {
 
             let mut stream = stream_attempt.unwrap();
             let mut codec = Framed::new();
-            let mut msg = codec.encode(ByteBuf::from_slice(&*req.write_to_bytes()
-                                                                .unwrap()));
+            let mut msg =
+                codec.encode(ByteBuf::from_slice(&*req.write_to_bytes()
+                                                      .unwrap()));
 
             if send_to(&mut stream, &mut msg).is_err() {
                 debug!("could not send");
@@ -135,7 +139,8 @@ impl Client {
             match recv_into(&mut stream, &mut codec) {
                 Ok(res_buf) => {
                     let res: &[u8] = res_buf.bytes();
-                    let cli_res: CliRes = protobuf::parse_from_bytes(res).unwrap();
+                    let cli_res: CliRes = protobuf::parse_from_bytes(res)
+                                              .unwrap();
                     if cli_res.has_redirect() {
                         debug!("we got redirect to {}!",
                                cli_res.get_redirect().get_address());
@@ -180,7 +185,9 @@ fn send_to(stream: &mut TcpStream, buf: &mut ByteBuf) -> io::Result<()> {
     }
 }
 
-fn recv_into<T>(stream: &mut TcpStream, codec: &mut Codec<ByteBuf, T>) -> io::Result<T> {
+fn recv_into<T>(stream: &mut TcpStream,
+                codec: &mut Codec<ByteBuf, T>)
+                -> io::Result<T> {
     loop {
         let mut res_buf = ByteBuf::mut_with_capacity(1024);
         match stream.try_read_buf(&mut res_buf) {

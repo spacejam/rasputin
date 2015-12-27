@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
 use std::thread;
 
-use bytes::{Buf};
-use mio::{EventLoop};
+use bytes::Buf;
+use mio::EventLoop;
 use rand::{Rng, thread_rng};
 use protobuf;
 use uuid::Uuid;

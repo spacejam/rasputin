@@ -164,10 +164,8 @@ impl State {
 
     fn can_extend_lead(&self) -> bool {
         match *self {
-            State::Candidate{ref have, need, ..} =>
-                have.len() > need as usize,
-            State::Leader{ref have, need, ..} =>
-                have.len() > need as usize,
+            State::Candidate{ref have, need, ..} => have.len() > need as usize,
+            State::Leader{ref have, need, ..} => have.len() > need as usize,
             _ => false,
         }
     }
