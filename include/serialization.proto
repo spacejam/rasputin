@@ -48,12 +48,24 @@ message DelRes {
 }
 
 message WatchReq {
-  required uint64 last_txid = 1;
+  optional uint64 last_txid = 1;
   required bool recursive = 2;
   required bool historical = 3;
 }
 
 message WatchRes {
+  required bool success = 1;
+  required Mutation last_mutation = 2;
+  optional string err = 3;
+}
+
+message SubscribeReq {
+  optional uint64 last_txid = 1;
+  required bool recursive = 2;
+  required bool historical = 3;
+}
+
+message SubscribeRes {
   required bool success = 1;
   repeated Mutation history = 2;
   optional string err = 3;
@@ -94,6 +106,7 @@ message CliReq {
   optional CASReq cas = 5;
   optional DelReq del = 6;
   optional WatchReq watch = 7;
+  optional SubscribeReq subscribe = 8;
 }
 
 message CliRes {
@@ -103,7 +116,8 @@ message CliRes {
   optional CASRes cas = 4;
   optional DelRes del = 5;
   optional WatchRes watch = 6;
-  optional RedirectRes redirect = 7;
+  optional SubscribeRes subscribe = 7;
+  optional RedirectRes redirect = 8;
 }
 
 //

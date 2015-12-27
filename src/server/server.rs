@@ -1,25 +1,17 @@
-use std::cmp;
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
-use std::ops::Add;
 use std::process;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
 use std::thread;
 
-use bytes::{Buf, ByteBuf};
-use mio;
-use mio::{EventLoop, Token};
+use bytes::{Buf};
+use mio::{EventLoop};
 use rand::{Rng, thread_rng};
 use protobuf;
-use protobuf::Message;
 use uuid::Uuid;
 
-use {Append, AppendRes, CASReq, CASRes, CliReq, CliRes, Clock, DelReq, DelRes,
-     GetReq, GetRes, Mutation, MutationType, PeerMsg, RealClock, RedirectRes,
-     SetReq, SetRes, Version, VoteReq, VoteRes};
-use server::{AckedLog, Envelope, InMemoryLog, KV, LEADER_DURATION, LogEntry,
-             PeerID, Range, RepPeer, SendChannel, State, Store, TXID, Term};
+use {CliReq, Clock, PeerMsg, RealClock};
+use server::{Envelope, KV, PeerID, Range, SendChannel};
 use server::traffic_cop::TrafficCop;
 
 pub struct Server<C: Clock, RE> {
@@ -35,9 +27,15 @@ pub struct Server<C: Clock, RE> {
 unsafe impl<C: Clock, RE> Sync for Server<C, RE>{}
 
 impl<C: Clock, RE> Server<C, RE> {
-    pub fn run(peer_port: u16,
+    pub fn initialize(storage_dir: String,
+                      peer_port: u16,
+                      peers: Vec<String>) {
+        println!("initializing");
+    }
+
+    pub fn run(storage_dir: String,
+               peer_port: u16,
                cli_port: u16,
-               storage_dir: String,
                peers: Vec<String>) {
         // All long-running worker threads get a clone of this
         // Sender.  When they exit, they send over it.  If the

@@ -14,24 +14,13 @@ pub use server::acked_log::{AckedLog, InMemoryLog, LogEntry};
 
 pub use server::storage::{KV, Log, Store, VFS};
 
-use std::io::{Error, ErrorKind};
-use std::io;
 use std::net::SocketAddr;
-use std::ops::{Add, Sub};
-use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{self, Receiver, SendError, Sender};
-use std::thread;
-use std::usize;
+use std::ops::Add;
+use std::sync::mpsc::{SendError, Sender};
 
-use bytes::{Buf, ByteBuf, MutByteBuf, SliceBuf, alloc};
+use bytes::{Buf, ByteBuf};
 use mio;
-use mio::{EventLoop, EventSet, Handler, NotifyError, PollOpt, Token, TryRead,
-          TryWrite};
-use mio::tcp::{TcpListener, TcpSocket, TcpStream};
-use mio::util::Slab;
-use rand::{Rng, thread_rng};
-use protobuf;
-use protobuf::Message;
+use mio::{NotifyError, Token};
 use time;
 
 pub const SERVER_CLIENTS: Token = Token(0);
@@ -123,17 +112,15 @@ pub enum State {
 impl State {
     fn valid_leader(&self, now: time::Timespec) -> bool {
         match *self {
-            State::Leader{until: until, ..} => now < until,
-            State::Follower{
-                term:_, id:_, leader_addr: _, until: until, tok: _
-            } => now < until,
+            State::Leader{until, ..} => now < until,
+            State::Follower{until, ..} => now < until,
             _ => false,
         }
     }
 
     fn valid_candidate(&self, now: time::Timespec) -> bool {
         match *self {
-            State::Candidate{until: until, ..} => now < until,
+            State::Candidate{until, ..} => now < until,
             _ => false,
         }
     }
@@ -168,7 +155,7 @@ impl State {
 
     fn should_extend_leadership(&self, now: time::Timespec) -> bool {
         match *self {
-            State::Leader{until: until, ..} => {
+            State::Leader{until, ..} => {
                 now.add(*LEADER_REFRESH) >= until && now < until
             }
             _ => false,
@@ -177,9 +164,9 @@ impl State {
 
     fn can_extend_lead(&self) -> bool {
         match *self {
-            State::Candidate{have: ref have, need: need, ..} =>
+            State::Candidate{ref have, need, ..} =>
                 have.len() > need as usize,
-            State::Leader{have: ref have, need: need, ..} =>
+            State::Leader{ref have, need, ..} =>
                 have.len() > need as usize,
             _ => false,
         }
@@ -187,25 +174,25 @@ impl State {
 
     fn following(&self, id: PeerID) -> bool {
         match *self {
-            State::Follower{id: ref fid, until: until, .. } => id == *fid,
+            State::Follower{id: ref fid, .. } => id == *fid,
             _ => false,
         }
     }
 
     fn until(&self) -> Option<time::Timespec> {
         match *self {
-            State::Leader{until: until, ..} => Some(until),
-            State::Candidate{until: until, ..} => Some(until),
-            State::Follower{ until: until, .. } => Some(until),
+            State::Leader{until, ..} => Some(until),
+            State::Candidate{until, ..} => Some(until),
+            State::Follower{until, .. } => Some(until),
             _ => None,
         }
     }
 
     pub fn term(&self) -> Option<Term> {
         match *self {
-            State::Leader{term: term, ..} => Some(term),
-            State::Candidate{term: term, ..} => Some(term),
-            State::Follower{term: term, .. } => Some(term),
+            State::Leader{term, ..} => Some(term),
+            State::Candidate{term, ..} => Some(term),
+            State::Follower{term, .. } => Some(term),
             _ => None,
         }
     }

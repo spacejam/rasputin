@@ -20,7 +20,7 @@ This program is the Rasputin DB server process.
 
 Usage:
     rasputind --help
-    rasputind [--cli-port=<listening port>] [--peer-port=<listening port>] [--seed-peers=<peers>] [--logfile=<file>] [--storage-dir=<directory>]
+    rasputind [--cli-port=<listening port>] [--peer-port=<listening port>] [--seed-peers=<peers>] [--logfile=<file>] [--storage-dir=<directory>] [--initialize]
 
 Options:
     --help                          Show this help message.
@@ -30,6 +30,7 @@ Options:
                                     foo.baz.com:7777,bar.baz.com:7777
     --logfile=<path>                File to log output to instead of stdout.
     --storage-dir=<path>            Directory to store the persisted data in; defaults to /var/lib/rasputin
+    --initialize                    Initializes the cluster.  Should be done once on a seed node.
 ";
 
 fn main() {
@@ -61,8 +62,18 @@ fn main() {
         .filter(|s| s != "")
         .collect();
 
-    Server::<RealClock, Result<(), SendError<Envelope>>>
-          ::run(peer_port, cli_port, storage_dir, seed_peers);
+    if args.flag_initialize {
+        Server::<RealClock,
+                 Result<(),
+                 SendError<Envelope>>>::initialize(storage_dir, peer_port, seed_peers);
+    } else {
+        Server::<RealClock,
+                 Result<(),
+                 SendError<Envelope>>>::run(storage_dir,
+                                            peer_port,
+                                            cli_port,
+                                            seed_peers)
+    }
 }
 
 #[derive(Debug, RustcDecodable)]
@@ -73,6 +84,7 @@ struct Args {
     flag_seed_peers: String,
     flag_logfile: Option<String>,
     flag_storage_dir: Option<String>,
+    flag_initialize: bool,
 }
 
 fn print_banner() {
