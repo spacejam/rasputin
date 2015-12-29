@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::collections::BTreeMap;
+use std::io;
 use std::process;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
@@ -72,7 +73,7 @@ impl<C: Clock, RE> Server<C, RE> {
         warn!("metadata initialized, restart db without the --initialize flag now.");
     }
 
-    pub fn populate_meta(&mut self, cached_meta: Meta) -> io::Result(()) {
+    pub fn populate_meta(&mut self, cached_meta: Meta) -> io::Result<()> {
         // create new range for meta
 
         // add it to self.ranges
@@ -174,6 +175,10 @@ impl<C: Clock, RE> Server<C, RE> {
                     process::exit(1);
                 }
             }
+        } else {
+            warn!("waiting on peers to tell us of our schemas, which we will cross-reference with
+            what we have on-disk.");
+            // TODO(tyler) implement backoff to seeds asking for META
         }
  
         // cli request handler thread

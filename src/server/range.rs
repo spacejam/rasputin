@@ -12,7 +12,7 @@ use protobuf::{self, Message};
 use {Append, AppendRes, CASRes, CliReq, CliRes, Clock, CollectionKind, DelRes,
      GetRes, Mutation, MutationType, PeerMsg, RedirectRes, SetRes, Version,
      VoteReq, VoteRes};
-use server::{AckedLog, Envelope, LEADER_DURATION, PeerID, RepPeer,
+use server::{AckedLog, InMemoryLog, Envelope, LEADER_DURATION, PeerID, RepPeer,
              SendChannel, State, Store, TXID, Term};
 
 pub struct Range<C: Clock, RE> {
@@ -35,38 +35,44 @@ pub struct Range<C: Clock, RE> {
 unsafe impl<C: Clock, RE> Sync for Range<C, RE>{}
 
 impl<C: Clock, RE> Range<C, RE> {
-    //
-    // fn new(id: PeerID, clock: Arc<C>, kind: CollectionKind, lower: Vec<u8>,
-    // upper: Vec<u8>,
-    // store: Arc<Store + Send + Sync>,
-    // peers: Vec<String>, rep_peers: BTreeMap<PeerID, RepPeer>,
-    // max_generated_txid: TXID,
-    // highest_term: Term, state: State, rpc_tx: Box<SendChannel<Envelope, RE> +
-    // Send>) -> Range<C, RE> {
-    // let mut rep_log = Box::new(InMemoryLog {
-    // pending: BTreeMap::new(),
-    // committed: BTreeMap::new(),
-    // quorum: peers.len() / 2 + 1,
-    // last_learned_txid: 0, // TODO(tyler) read from rocksdb
-    // last_learned_term: 0, // TODO(tyler) read from rocksdb
-    // last_accepted_txid: 0, // TODO(tyler) read from rocksdb
-    // last_accepted_term: 0, // TODO(tyler) read from rocksdb
-    // });
-    // Range {
-    // id: id,
-    // clock: clock,
-    // kind: kind,
-    // lower: lower,
-    // upper: upper,
-    // store: store,
-    // rep_log: rep_log,
-    // max_generated_txid: max_generated_txid,
-    // highest_term: highest_term,
-    // state: state,
-    // rpc_tx: rpc_tx,
-    // }
-    // }
-    //
+    
+    fn new(id: PeerID,
+           clock: Arc<C>,
+           kind: CollectionKind,
+           lower: Vec<u8>,
+           upper: Vec<u8>,
+           store: Arc<Store + Send + Sync>,
+           peers: Vec<String>,
+           rep_peers: BTreeMap<PeerID, RepPeer>,
+           max_generated_txid: TXID,
+           highest_term: Term,
+           state: State,
+           rpc_tx: Box<SendChannel<Envelope, RE> + Send>)
+           -> Range<C, RE> {
+
+        let mut rep_log = Box::new(InMemoryLog {
+            pending: BTreeMap::new(),
+            committed: BTreeMap::new(),
+            quorum: peers.len() / 2 + 1,
+            last_learned_txid: 0, // TODO(tyler) read from rocksdb
+            last_learned_term: 0, // TODO(tyler) read from rocksdb
+            last_accepted_txid: 0, // TODO(tyler) read from rocksdb last_accepted_term: 0, // TODO(tyler) read from rocksdb
+        });
+        
+        Range {
+            id: id,
+            clock: clock,
+            kind: kind,
+            lower: lower,
+            upper: upper,
+            store: store,
+            rep_log: rep_log,
+            max_generated_txid: max_generated_txid,
+            highest_term: highest_term,
+            state: state,
+            rpc_tx: rpc_tx,
+        }
+    }
 
     fn update_rep_peers(&mut self,
                         peer_id: PeerID,
