@@ -130,9 +130,7 @@ impl Client {
         req.set_have_meta_req(have_meta_req);
         req.set_req_id(0);
         req.set_key(b"\x00\x00META".to_vec());
-        println!("1");
         let req_bytes = req.write_to_bytes().unwrap();
-        println!("2");
 
         let servers = self.servers.clone();
         let responses = self.req_fold(req_bytes, servers, vec![], vec![], false);
@@ -184,21 +182,17 @@ impl Client {
                 if short_circuit {
                     return vec![Ok(res)];
                 }
-                println!("1");
                 Ok(res)
             },
             Response::UnableToConnect => {
                 error!("error connecting to server {}", peer);
-                println!("2");
                 Err(Error::new(ErrorKind::Other, "unable to reach server"))
             },
             Response::Err(e) => {
                 error!("error response from server: {}", e);
-                println!("3");
                 Err(e)
             },
             Response::Redirect(dest) => {
-                println!("4");
                 match dest.parse() {
                     Ok(addr) => {
                         // if it's not in tried or peers, add it to self.servers
@@ -236,22 +230,17 @@ fn req_from(peer: SocketAddr, req_bytes: Vec<u8>) -> Response {
     debug!("connected to {:?}", peer);
 
     let mut codec = Framed::new();
-    println!("4b, len is {}", req_bytes.len());
     let mut msg = codec.encode(ByteBuf::from_slice(&*req_bytes));
-    println!("4a");
 
     match send_to(&mut stream, &mut msg) {
         Err(e) => return Response::Err(e),
         _ => (),
     }
-    println!("4");
 
     match recv_into(&mut stream, &mut codec) {
         Ok(res_buf) => {
             let res: &[u8] = res_buf.bytes();
-            println!("5");
             let cli_res: CliRes = protobuf::parse_from_bytes(res).unwrap();
-            println!("6");
             if cli_res.has_redirect() {
                 debug!("we got redirect to {}!",
                        cli_res.get_redirect().get_address());
@@ -259,7 +248,7 @@ fn req_from(peer: SocketAddr, req_bytes: Vec<u8>) -> Response {
                 return Response::Redirect(cli_res.get_redirect().get_address().to_string());
             }
             Response::Ok(cli_res)
-        }
+        },
         Err(e) => {
             debug!("got err on recv_into: {}", e);
             Response::Err(e)
@@ -273,18 +262,18 @@ fn send_to(stream: &mut TcpStream, buf: &mut ByteBuf) -> io::Result<()> {
             Ok(None) => {
                 debug!("client wrote none");
                 continue;
-            }
+            },
             Ok(Some(r)) => {
                 debug!("client wrote {}, {} remaining", r, buf.remaining());
                 if buf.remaining() == 0 {
                     return Ok(());
                 }
-            }
+            },
             Err(e) => {
                 match e.raw_os_error() {
                     Some(32) => {
                         debug!("client disconnected");
-                    }
+                    },
                     Some(e) => debug!("not implemented; client os err={:?}", e),
                     _ => debug!("not implemented; client err={:?}", e),
                 }

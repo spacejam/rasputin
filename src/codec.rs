@@ -95,15 +95,10 @@ impl Codec<ByteBuf, ByteBuf> for Framed {
     }
 
     fn encode(&self, item: ByteBuf) -> ByteBuf {
-        println!("e1");
         let b = item.bytes();
-        println!("e2");
         let mut res = ByteBuf::mut_with_capacity(4 + b.len());
-        println!("e3");
         assert!(res.write_slice(&usize_to_array(b.len())) == 4);
-        println!("e4");
         assert!(res.write_slice(b) == b.len());
-        println!("e5");
         res.flip()
     }
 }

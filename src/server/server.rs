@@ -72,6 +72,14 @@ impl<C: Clock, RE> Server<C, RE> {
         warn!("metadata initialized, restart db without the --initialize flag now.");
     }
 
+    pub fn populate_meta(&mut self, cached_meta: Meta) -> io::Result(()) {
+        // create new range for meta
+
+        // add it to self.ranges
+
+        // tell traffic cop to 
+    }
+
     pub fn run(storage_dir: String,
                local_peer_addr: String,
                local_cli_addr: String,
@@ -156,7 +164,17 @@ impl<C: Clock, RE> Server<C, RE> {
         //  1. none of them have heard of META shard before
         //      if any of them have, get it
         let cached_meta = kv.get_meta().unwrap();
-        let is_seeding = should_seed(cached_meta, local_peer_addr.clone(), peers);
+        let is_seeding = should_seed(cached_meta.clone(), local_peer_addr.clone(), peers);
+        if is_seeding {
+            warn!("initializing fresh meta range");
+            match server.lock() {
+                Ok(mut srv) => srv.populate_meta(cached_meta.unwrap()),
+                Err(e) => {
+                    error!("{}", e);
+                    process::exit(1);
+                }
+            }
+        }
  
         // cli request handler thread
         let srv2 = server.clone();
@@ -318,6 +336,7 @@ fn should_seed(cached_meta: Option<Meta>, local_peer_addr: String, peers: Vec<St
         let peer_addrs = peers.iter().map(|p| p.parse().unwrap()).collect();
         let mut cli = Client::new(peer_addrs, 1);
         loop {
+            warn!("trying to query peers to determine suitability of seed");
             match cli.meta_is_available() {
                 Ok(false) =>
                     // we reached everything, and didn't get any redirects
