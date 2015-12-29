@@ -19,18 +19,18 @@ pub struct TrafficCop {
 
 impl TrafficCop {
 
-    pub fn new(peer_port: u16,
-               cli_port: u16,
+    pub fn new(local_peer_addr: String,
+               local_cli_addr: String,
                peer_addrs: Vec<String>,
                peer_req_tx: Sender<Envelope>,
                cli_req_tx: Sender<Envelope>)
                -> io::Result<TrafficCop> {
 
-        let cli_addr = format!("0.0.0.0:{}", cli_port).parse().unwrap();
+        let cli_addr = local_cli_addr.parse().unwrap();
         info!("binding to {} for client connections", cli_addr);
         let cli_srv_sock = try!(TcpListener::bind(&cli_addr));
 
-        let peer_addr = format!("0.0.0.0:{}", peer_port).parse().unwrap();
+        let peer_addr = local_peer_addr.parse().unwrap();
         info!("binding to {} for peer connections", peer_addr);
         let peer_srv_sock = try!(TcpListener::bind(&peer_addr));
 

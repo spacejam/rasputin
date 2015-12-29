@@ -1,38 +1,41 @@
+use std::net::SocketAddr;
 use std::collections::BTreeMap;
 use std::process;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
 use std::thread;
 
-use bytes::Buf;
+use bytes::{Buf, ByteBuf};
 use mio::EventLoop;
 use rand::{Rng, thread_rng};
 use protobuf::{self, Message};
 use uuid::Uuid;
 
+use Client;
 use constants;
 use serialization::{Meta, RangeMeta, Replica, Collection, RetentionPolicy,
-                    CollectionType};
-use {CliReq, Clock, PeerMsg, RealClock};
+                    CollectionType, HaveMetaRes};
+use {CliReq, CliRes, Clock, PeerMsg, RealClock};
 use server::{Envelope, KV, PeerID, Range, SendChannel};
 use server::traffic_cop::TrafficCop;
 use server::storage::kv::upper_bound;
 
 pub struct Server<C: Clock, RE> {
     pub clock: Arc<C>,
-    pub peer_port: u16,
-    pub cli_port: u16,
+    pub local_peer_addr: String,
+    pub local_cli_addr: String,
     pub id: PeerID,
     pub rpc_tx: Box<SendChannel<Envelope, RE> + Send>,
     pub ranges: BTreeMap<Vec<u8>, Range<C, RE>>,
     pub kv: Arc<KV>,
+    pub has_seen_meta: bool,
 }
 
 unsafe impl<C: Clock, RE> Sync for Server<C, RE>{}
 
 impl<C: Clock, RE> Server<C, RE> {
     pub fn initialize_meta(storage_dir: String,
-                           peer_port: u16,
+                           local_peer_addr: String,
                            peers: Vec<String>) {
 
         warn!("initializing meta with seeds {:?}", peers);
@@ -47,9 +50,6 @@ impl<C: Clock, RE> Server<C, RE> {
 
         let mut range = RangeMeta::new();
         range.set_lower(constants::META.to_vec());
-        range.set_upper(upper_bound(constants::META));
-        range.set_field_type(CollectionType::KV);
-        range.set_name("META".to_string());
         range.set_replicas(protobuf::RepeatedField::from_vec(replicas));
 
         let mut collection = Collection::new();
@@ -62,12 +62,19 @@ impl<C: Clock, RE> Server<C, RE> {
         let mut meta = Meta::new();
         meta.set_collections(protobuf::RepeatedField::from_vec(vec![collection]));
 
-        // TODO(tyler) persist range
+        let kv  = KV::new(storage_dir);
+        match kv.get_meta() {
+            Ok(Some(_m)) => panic!("metadata already exists"),
+            Err(e) => panic!(e),
+            _ => (),
+        }
+        kv.persist_meta(&meta).unwrap();
+        warn!("metadata initialized, restart db without the --initialize flag now.");
     }
 
     pub fn run(storage_dir: String,
-               peer_port: u16,
-               cli_port: u16,
+               local_peer_addr: String,
+               local_cli_addr: String,
                peers: Vec<String>) {
         // All long-running worker threads get a clone of this
         // Sender.  When they exit, they send over it.  If the
@@ -84,8 +91,8 @@ impl<C: Clock, RE> Server<C, RE> {
         let (peer_req_tx, peer_req_rx) = mpsc::channel();
         let (cli_req_tx, cli_req_rx) = mpsc::channel();
 
-        let mut tc = TrafficCop::new(peer_port,
-                                     cli_port,
+        let mut tc = TrafficCop::new(local_peer_addr.clone(),
+                                     local_cli_addr.clone(),
                                      peers.clone(),
                                      peer_req_tx,
                                      cli_req_tx)
@@ -111,15 +118,17 @@ impl<C: Clock, RE> Server<C, RE> {
             });
 
         let clock = Arc::new(RealClock);
+        let kv = Arc::new(KV::new(storage_dir));
 
         let server = Arc::new(Mutex::new(Server {
             clock: clock.clone(),
-            peer_port: peer_port,
-            cli_port: cli_port,
+            local_peer_addr: local_peer_addr.clone(),
+            local_cli_addr: local_cli_addr,
             id: Uuid::new_v4().to_string(), // TODO(tyler) read from rocksdb
             rpc_tx: Box::new(rpc_tx),
-            kv: Arc::new(KV::new(storage_dir)),
+            kv: kv.clone(),
             ranges: BTreeMap::new(),
+            has_seen_meta: false,
         }));
 
         // peer request handler thread
@@ -140,6 +149,15 @@ impl<C: Clock, RE> Server<C, RE> {
                 tex2.send(());
             });
 
+        // query peers, only creating meta if:
+        //  1. we have fresh META in our cached local meta with ourselves as a replica
+        //  1. all seed peers are reachable
+        //      (log + retry until they are, because this is a big deal and should sacrifice availability)
+        //  1. none of them have heard of META shard before
+        //      if any of them have, get it
+        let cached_meta = kv.get_meta().unwrap();
+        let is_seeding = should_seed(cached_meta, local_peer_addr.clone(), peers);
+ 
         // cli request handler thread
         let srv2 = server.clone();
         let tex3 = thread_exit_tx.clone();
@@ -227,13 +245,37 @@ impl<C: Clock, RE> Server<C, RE> {
         self.ranges.get_mut(&*key)
     }
 
+    fn reply(&mut self, req: Envelope, res_buf: ByteBuf) {
+        self.rpc_tx.send_msg(Envelope {
+            address: req.address,
+            tok: req.tok,
+            msg: res_buf,
+        });
+    }
+
     pub fn handle_peer(&mut self, env: Envelope) {
-        let peer_msg: PeerMsg = protobuf::parse_from_bytes(env.msg.bytes())
-                                    .unwrap();
-        self.ranges
-            .get_mut(peer_msg.get_range_prefix())
-            .unwrap()
-            .handle_peer(env);
+        let peer_msg: Result<PeerMsg, _> = protobuf::parse_from_bytes(env.msg.bytes());
+
+        if peer_msg.is_err() {
+            // TODO(tyler) this is a hack to let servers handle cli messages because
+            // I didn't feel like writing the server client code at 3am at the 32c3.
+            let cli_req: CliReq = protobuf::parse_from_bytes(env.msg.bytes()).unwrap();
+            if cli_req.has_have_meta_req() {
+                let mut have_meta_res = HaveMetaRes::new();
+                have_meta_res.set_has_seen_meta(self.has_seen_meta);
+
+                let mut res = CliRes::new();
+                res.set_have_meta_res(have_meta_res);
+                res.set_req_id(0);
+
+                self.reply(env, ByteBuf::from_slice(&*res.write_to_bytes().unwrap()));
+            }
+        } else {
+            self.ranges
+                .get_mut(peer_msg.unwrap().get_range_prefix())
+                .unwrap()
+                .handle_peer(env);
+        }
     }
 
     fn handle_cli(&mut self, env: Envelope) {
@@ -252,3 +294,46 @@ impl<C: Clock, RE> Server<C, RE> {
         self.ranges.get_mut(ranges.last().unwrap()).unwrap().handle_peer(env);
     }
 }
+
+fn we_are_in_local_cached_meta(meta_opt: Option<Meta>, our_addr: String) -> bool {
+    match meta_opt {
+        None => return false,
+        Some(meta) => {
+            for collection in meta.get_collections().iter() {
+                for range in collection.get_ranges().iter() {
+                    for replica in range.get_replicas().iter() {
+                        if replica.get_address() == our_addr {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn should_seed(cached_meta: Option<Meta>, local_peer_addr: String, peers: Vec<String>) -> bool {
+    if we_are_in_local_cached_meta(cached_meta, local_peer_addr.clone()) {
+        let peer_addrs = peers.iter().map(|p| p.parse().unwrap()).collect();
+        let mut cli = Client::new(peer_addrs, 1);
+        loop {
+            match cli.meta_is_available() {
+                Ok(false) =>
+                    // we reached everything, and didn't get any redirects
+                    return true,
+                Ok(true) =>
+                    // we reached everything, but found some existing meta
+                    return false,
+                Err(e) => {
+                    // we couldn't reach everything
+                    error!("couldn't reach all peers to verify that meta has yet to be seeded:
+                    {}", e);
+                },
+            }
+            thread::sleep_ms(1000);
+        }
+    }
+    false
+}
+

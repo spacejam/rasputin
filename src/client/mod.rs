@@ -10,8 +10,15 @@ use mio::{TryRead, TryWrite};
 use mio::tcp::TcpStream;
 
 use {CASReq, CASRes, CliReq, CliRes, DelReq, DelRes, GetReq, GetRes,
-     RangeBounds, RedirectRes, SetReq, SetRes, Version};
+     RangeBounds, RedirectRes, SetReq, SetRes, Version, PeerMsg, HaveMetaReq, HaveMetaRes};
 use codec::{self, Codec, Framed};
+
+pub enum Response {
+    Ok(CliRes),
+    Err(io::Error),
+    UnableToConnect,
+    Redirect(String),
+}
 
 pub struct Client {
     servers: Vec<SocketAddr>,
@@ -117,45 +124,146 @@ impl Client {
         })
     }
 
-    fn req(&mut self, key: Vec<u8>, req: CliReq) -> io::Result<CliRes> {
-        // send to a peer, they'll redirect us if we're wrong
-        for peer in self.servers.iter() {
-            debug!("trying peer {:?}", peer);
-            let mut stream_attempt = TcpStream::connect(&peer);
-            if stream_attempt.is_err() {
-                continue;
-            }
+    pub fn meta_is_available(&mut self) -> io::Result<bool> {
+        let have_meta_req = HaveMetaReq::new();
+        let mut req = CliReq::new();
+        req.set_have_meta_req(have_meta_req);
+        req.set_req_id(0);
+        req.set_key(b"\x00\x00META".to_vec());
+        println!("1");
+        let req_bytes = req.write_to_bytes().unwrap();
+        println!("2");
 
-            let mut stream = stream_attempt.unwrap();
-            let mut codec = Framed::new();
-            let mut msg =
-                codec.encode(ByteBuf::from_slice(&*req.write_to_bytes()
-                                                      .unwrap()));
-
-            if send_to(&mut stream, &mut msg).is_err() {
-                debug!("could not send");
-                continue;
-            }
-            match recv_into(&mut stream, &mut codec) {
-                Ok(res_buf) => {
-                    let res: &[u8] = res_buf.bytes();
-                    let cli_res: CliRes = protobuf::parse_from_bytes(res)
-                                              .unwrap();
-                    if cli_res.has_redirect() {
-                        debug!("we got redirect to {}!",
-                               cli_res.get_redirect().get_address());
-                        // TODO(tyler) try redirected host next
-                        continue;
+        let servers = self.servers.clone();
+        let responses = self.req_fold(req_bytes, servers, vec![], vec![], false);
+        for response in responses {
+            match response {
+                Ok(res) => {
+                    let get_res = res.get_get();
+                    if get_res.get_success() {
+                        // this means that we successfully retrieved the meta key from
+                        // a peer or a node that they redirected us to
+                        return Ok(true)
                     }
-                    return Ok(cli_res);
-                }
+                },
                 Err(e) => {
-                    debug!("got err on recv_into: {}", e);
-                    continue;
-                }
+                    return Err(e);
+                },
             }
         }
-        Err(Error::new(ErrorKind::Other, "unable to reach any servers!"))
+        Ok(false)
+    }
+
+    fn req(&mut self, key: Vec<u8>, req: CliReq) -> io::Result<CliRes> {
+        // send to a peer, they'll redirect us if we're wrong
+        let req_bytes = req.write_to_bytes().unwrap();
+        let servers = self.servers.clone();
+        let mut responses = self.req_fold(req_bytes, servers, vec![], vec![], true);
+        responses.pop().unwrap()
+    }
+
+    fn req_fold(&mut self,
+                req_bytes: Vec<u8>,
+                mut peers: Vec<SocketAddr>,
+                mut tried: Vec<SocketAddr>,
+                mut responses: Vec<io::Result<CliRes>>,
+                short_circuit: bool)
+                -> Vec<io::Result<CliRes>> {
+        if peers.len() == 0 {
+            if responses.len() == 0 {
+                return vec![Err(Error::new(ErrorKind::Other, "unable to reach any servers!"))];
+            } else {
+                return responses;
+            }
+        }
+
+        let peer = peers.pop().unwrap();
+        tried.push(peer);
+        let res = match req_from(peer, req_bytes.clone()) {
+            Response::Ok(res) => {
+                if short_circuit {
+                    return vec![Ok(res)];
+                }
+                println!("1");
+                Ok(res)
+            },
+            Response::UnableToConnect => {
+                error!("error connecting to server {}", peer);
+                println!("2");
+                Err(Error::new(ErrorKind::Other, "unable to reach server"))
+            },
+            Response::Err(e) => {
+                error!("error response from server: {}", e);
+                println!("3");
+                Err(e)
+            },
+            Response::Redirect(dest) => {
+                println!("4");
+                match dest.parse() {
+                    Ok(addr) => {
+                        // if it's not in tried or peers, add it to self.servers
+                        if !self.servers.contains(&addr) {
+                            self.servers.push(addr);
+                        }
+                        // if we haven't tried it, push to head and drop from peers
+                        if !tried.contains(&addr) {
+                            peers.push(addr);       
+                        }
+                    },
+                    Err(e) => {
+                        error!("we were given an invalid redirect addr: {}", e);
+                    }
+                }
+                Err(Error::new(ErrorKind::Other, "redirect"))
+            },
+        };
+        responses.push(res);
+        self.req_fold(req_bytes, peers, tried, responses, short_circuit)
+    }
+}
+
+fn req_from(peer: SocketAddr, req_bytes: Vec<u8>) -> Response {
+    if req_bytes.len() == 0 {
+        return Response::Err(Error::new(ErrorKind::Other, "empty request sent to client"));
+    }
+
+    debug!("trying peer {:?}", peer);
+    let mut stream = match TcpStream::connect(&peer) {
+        Err(e) => return Response::UnableToConnect,
+        Ok(sa) => sa,
+    };
+
+    debug!("connected to {:?}", peer);
+
+    let mut codec = Framed::new();
+    println!("4b, len is {}", req_bytes.len());
+    let mut msg = codec.encode(ByteBuf::from_slice(&*req_bytes));
+    println!("4a");
+
+    match send_to(&mut stream, &mut msg) {
+        Err(e) => return Response::Err(e),
+        _ => (),
+    }
+    println!("4");
+
+    match recv_into(&mut stream, &mut codec) {
+        Ok(res_buf) => {
+            let res: &[u8] = res_buf.bytes();
+            println!("5");
+            let cli_res: CliRes = protobuf::parse_from_bytes(res).unwrap();
+            println!("6");
+            if cli_res.has_redirect() {
+                debug!("we got redirect to {}!",
+                       cli_res.get_redirect().get_address());
+                // TODO(tyler) try redirected host next
+                return Response::Redirect(cli_res.get_redirect().get_address().to_string());
+            }
+            Response::Ok(cli_res)
+        }
+        Err(e) => {
+            debug!("got err on recv_into: {}", e);
+            Response::Err(e)
+        }
     }
 }
 
@@ -163,9 +271,11 @@ fn send_to(stream: &mut TcpStream, buf: &mut ByteBuf) -> io::Result<()> {
     loop {
         match stream.try_write_buf(buf) {
             Ok(None) => {
+                debug!("client wrote none");
                 continue;
             }
             Ok(Some(r)) => {
+                debug!("client wrote {}, {} remaining", r, buf.remaining());
                 if buf.remaining() == 0 {
                     return Ok(());
                 }

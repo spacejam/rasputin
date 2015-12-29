@@ -107,6 +107,7 @@ message CliReq {
   optional DelReq del = 6;
   optional WatchReq watch = 7;
   optional SubscribeReq subscribe = 8;
+  optional HaveMetaReq have_meta_req = 9;
 }
 
 message CliRes {
@@ -118,6 +119,7 @@ message CliRes {
   optional WatchRes watch = 6;
   optional SubscribeRes subscribe = 7;
   optional RedirectRes redirect = 8;
+  optional HaveMetaRes have_meta_res = 9;
 }
 
 //
@@ -160,14 +162,17 @@ message PeerMsg {
   optional VoteRes vote_res = 4;
   optional Append append = 5;
   optional AppendRes append_res = 6;
-  optional CreateMeta create_meta = 7;
 }
 
 //
 // Meta
 //
 
-message CreateMeta {}
+message HaveMetaReq {}
+
+message HaveMetaRes {
+  required bool has_seen_meta = 1;
+}
 
 enum CollectionType {
   KV = 1;
@@ -187,9 +192,7 @@ message Replica {
 
 message RangeMeta {
   required bytes lower = 1;
-  required bytes upper = 2;
-  required CollectionType type = 3;
-  required string name = 4;
+  optional bytes upper = 2;
   repeated Replica replicas = 5;
 }
 

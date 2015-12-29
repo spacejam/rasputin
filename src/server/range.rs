@@ -7,8 +7,7 @@ use std::thread;
 
 use bytes::{Buf, ByteBuf};
 use mio::Token;
-use protobuf;
-use protobuf::Message;
+use protobuf::{self, Message};
 
 use {Append, AppendRes, CASRes, CliReq, CliRes, Clock, CollectionKind, DelRes,
      GetRes, Mutation, MutationType, PeerMsg, RedirectRes, SetRes, Version,
