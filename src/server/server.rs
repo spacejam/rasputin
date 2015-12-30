@@ -80,9 +80,14 @@ impl<C: Clock, S: SendChannel> Server<C, S> {
         let range_meta = collection.get_ranges().first().unwrap();
         assert!(range_meta.get_lower() == meta_key);
 
-        let mut peers = range_meta.get_replicas()
+        let peers = range_meta.get_replicas()
                                   .iter()
-                                  .map(|r| r.get_address().to_string())
+                                  .map(|r| {
+                                      let address = r.get_address().to_string();
+                                      // tell traffic cop about new peers to stay in touch with
+                                      self.rpc_tx.send_msg(EventLoopMessage::AddPeer(address.clone()));
+                                      address
+                                  })
                                   .collect();
 
         let mut range = Range::initial(
@@ -100,8 +105,6 @@ impl<C: Clock, S: SendChannel> Server<C, S> {
         // persist its metadata to local_meta LOCAL_RANGES
 
         // add it to self.ranges
-
-        // tell traffic cop about new peers to stay in touch with
 
         Ok(())
     }

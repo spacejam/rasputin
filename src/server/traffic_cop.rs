@@ -201,11 +201,17 @@ impl Handler for TrafficCop {
         match elm {
             EventLoopMessage::AddPeer(peer) => {
                 match peer.parse() {
-                    Ok(socket_addr) => 
+                    Ok(socket_addr) => {
+                        if self.peers.iter().any(|p| p.addr == socket_addr) {
+                            debug!("peer {:?} already known", socket_addr);
+                            return;
+                        }
+                        info!("adding new peer {:?}", socket_addr);
                         self.peers.push(Peer {
                             addr: socket_addr,
                             sock: None,
-                        }),
+                        })
+                    },
                     Err(e) =>
                         error!("failed to parse peer address: {}", e),
                 }
