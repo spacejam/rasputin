@@ -22,8 +22,8 @@ impl TrafficCop {
     pub fn new(local_peer_addr: String,
                local_cli_addr: String,
                peer_addrs: Vec<String>,
-               peer_req_tx: Sender<Envelope>,
-               cli_req_tx: Sender<Envelope>)
+               peer_req_tx: Sender<EventLoopMessage>,
+               cli_req_tx: Sender<EventLoopMessage>)
                -> io::Result<TrafficCop> {
 
         let cli_addr = local_cli_addr.parse().unwrap();
@@ -94,7 +94,7 @@ impl TrafficCop {
 
 impl Handler for TrafficCop {
     type Timeout = ();
-    type Message = Envelope;
+    type Message = EventLoopMessage;
 
     fn ready(&mut self,
              event_loop: &mut EventLoop<TrafficCop>,
@@ -193,44 +193,56 @@ impl Handler for TrafficCop {
         event_loop.timeout_ms((), rng.gen_range(200, 500)).unwrap();
     }
 
-    // notify is used to transmit messages
+    // Notify is used to communicate with the event loop from another thread
+    // or time.
     fn notify(&mut self,
               event_loop: &mut EventLoop<TrafficCop>,
-              mut msg: Envelope) {
-        let mut toks = vec![];
-        toks.push(msg.tok);
-        for tok in toks {
-            let sco = self.tok_to_sc(tok);
-            if sco.is_none() {
-                warn!("got notify for invalid token {}", tok.as_usize());
-                continue;
+              mut elm: EventLoopMessage) {
+        match elm {
+            EventLoopMessage::AddPeer(peer) => {
+                match peer.parse() {
+                    Ok(socket_addr) => 
+                        self.peers.push(Peer {
+                            addr: socket_addr,
+                            sock: None,
+                        }),
+                    Err(e) =>
+                        error!("failed to parse peer address: {}", e),
+                }
             }
-            let mut sc = sco.unwrap();
-            let m = msg.msg.bytes();
+            EventLoopMessage::Envelope{tok, msg, ..} => {
+                let sco = self.tok_to_sc(tok);
+                if sco.is_none() {
+                    warn!("got notify for invalid token {}", tok.as_usize());
+                    return;
+                }
+                let mut sc = sco.unwrap();
+                let m = msg.bytes();
 
-            let size = 4 + m.len();
-            let mut res = unsafe {
-                ByteBuf::from_mem_ref(alloc::heap(size.next_power_of_two()),
-                                      size as u32, // cap
-                                      0, // pos
-                                      size as u32 /* lim */)
-                    .flip()
-            };
+                let size = 4 + m.len();
+                let mut res = unsafe {
+                    ByteBuf::from_mem_ref(alloc::heap(size.next_power_of_two()),
+                                          size as u32, // cap
+                                          0, // pos
+                                          size as u32 /* lim */)
+                        .flip()
+                };
 
-            assert!(res.write_slice(&codec::usize_to_array(m.len())) == 4);
-            assert!(res.write_slice(m) == m.len());
+                assert!(res.write_slice(&codec::usize_to_array(m.len())) == 4);
+                assert!(res.write_slice(m) == m.len());
 
-            debug!("adding res to sc.res_bufs: {:?}", res.bytes());
+                debug!("adding res to sc.res_bufs: {:?}", res.bytes());
 
-            sc.res_remaining += res.bytes().len();
-            sc.res_bufs.push(res.flip());
+                sc.res_remaining += res.bytes().len();
+                sc.res_bufs.push(res.flip());
 
-            sc.interest.insert(EventSet::writable());
+                sc.interest.insert(EventSet::writable());
 
-            event_loop.reregister(&sc.sock,
-                                  tok,
-                                  sc.interest,
-                                  PollOpt::edge() | PollOpt::oneshot());
+                event_loop.reregister(&sc.sock,
+                                      tok,
+                                      sc.interest,
+                                      PollOpt::edge() | PollOpt::oneshot());
+            },
         }
     }
 }

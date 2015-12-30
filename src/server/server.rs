@@ -17,7 +17,7 @@ use constants;
 use serialization::{Meta, RangeMeta, Replica, Collection, RetentionPolicy,
                     CollectionType, HaveMetaRes};
 use {CliReq, CliRes, Clock, PeerMsg, RealClock, CollectionKind};
-use server::{Envelope, KV, PeerID, Range, SendChannel, State};
+use server::{KV, PeerID, Range, SendChannel, State, EventLoopMessage};
 use server::traffic_cop::TrafficCop;
 use server::storage::kv::upper_bound;
 
@@ -101,7 +101,8 @@ impl<C: Clock, S: SendChannel> Server<C, S> {
 
         // add it to self.ranges
 
-        // tell traffic cop to 
+        // tell traffic cop about new peers to stay in touch with
+
         Ok(())
     }
 
@@ -295,21 +296,34 @@ impl<C: Clock, S: SendChannel> Server<C, S> {
         self.ranges.get_mut(&*key)
     }
 
-    fn reply(&mut self, req: Envelope, res_buf: ByteBuf) {
-        self.rpc_tx.send_msg(Envelope {
-            address: req.address,
-            tok: req.tok,
-            msg: res_buf,
-        });
+    fn reply(&mut self, elm: EventLoopMessage, res_buf: ByteBuf) {
+        match elm {
+            EventLoopMessage::Envelope {address, tok, msg} => {
+                self.rpc_tx.send_msg(EventLoopMessage::Envelope {
+                    address: address,
+                    tok: tok,
+                    msg: res_buf,
+                });
+            },
+            _ => error!("got reply for non-envelope message!"),
+        }
     }
 
-    pub fn handle_peer(&mut self, env: Envelope) {
-        let peer_msg: Result<PeerMsg, _> = protobuf::parse_from_bytes(env.msg.bytes());
+    pub fn handle_peer(&mut self, elm: EventLoopMessage) {
+        let msg = match elm.clone() {
+            EventLoopMessage::Envelope{msg, ..} => msg,
+            _ => {
+                error!("received non-envelope message in handle_peer!");
+                return;
+            },
+        };
+
+        let peer_msg: Result<PeerMsg, _> = protobuf::parse_from_bytes(msg.bytes());
 
         if peer_msg.is_err() {
             // TODO(tyler) this is a hack to let servers handle cli messages because
             // I didn't feel like writing the server client code at 3am at the 32c3.
-            let cli_req: CliReq = protobuf::parse_from_bytes(env.msg.bytes()).unwrap();
+            let cli_req: CliReq = protobuf::parse_from_bytes(msg.bytes()).unwrap();
             if cli_req.has_have_meta_req() {
                 let mut have_meta_res = HaveMetaRes::new();
                 have_meta_res.set_has_seen_meta(self.has_seen_meta);
@@ -318,18 +332,26 @@ impl<C: Clock, S: SendChannel> Server<C, S> {
                 res.set_have_meta_res(have_meta_res);
                 res.set_req_id(0);
 
-                self.reply(env, ByteBuf::from_slice(&*res.write_to_bytes().unwrap()));
+                self.reply(elm, ByteBuf::from_slice(&*res.write_to_bytes().unwrap()));
             }
         } else {
             self.ranges
                 .get_mut(peer_msg.unwrap().get_range_prefix())
                 .unwrap()
-                .handle_peer(env);
+                .handle_peer(elm);
         }
     }
 
-    fn handle_cli(&mut self, env: Envelope) {
-        let cli_req: CliReq = protobuf::parse_from_bytes(env.msg.bytes())
+    fn handle_cli(&mut self, elm: EventLoopMessage) {
+        let msg = match elm.clone() {
+            EventLoopMessage::Envelope{msg, ..} => msg,
+            _ => {
+                error!("received non-envelope message in handle_peer!");
+                return;
+            },
+        };
+
+        let cli_req: CliReq = protobuf::parse_from_bytes(msg.bytes())
                                   .unwrap();
         let key = cli_req.get_key();
         let ranges: Vec<Vec<u8>> = self.ranges
@@ -341,7 +363,7 @@ impl<C: Clock, S: SendChannel> Server<C, S> {
         if ranges.len() == 0 {
             // TODO(tyler) reply with range-aware redirect
         }
-        self.ranges.get_mut(ranges.last().unwrap()).unwrap().handle_peer(env);
+        self.ranges.get_mut(ranges.last().unwrap()).unwrap().handle_peer(elm);
     }
 }
 

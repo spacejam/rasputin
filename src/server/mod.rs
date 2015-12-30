@@ -37,32 +37,40 @@ pub type TXID = u64;
 pub type Term = u64;
 pub type PeerID = String;
 
-pub struct Envelope {
-    pub address: Option<SocketAddr>,
-    pub tok: Token,
-    pub msg: ByteBuf,
+pub enum EventLoopMessage {
+    Envelope {
+        address: Option<SocketAddr>,
+        tok: Token,
+        msg: ByteBuf,
+    },
+    AddPeer(String),
 }
 
-impl Clone for Envelope {
+impl Clone for EventLoopMessage {
     fn clone(&self) -> Self {
-        Envelope {
-            address: self.address,
-            tok: self.tok,
-            msg: ByteBuf::from_slice(self.msg.bytes()),
+        match self {
+            &EventLoopMessage::Envelope{address, ref tok, ref msg} =>
+                EventLoopMessage::Envelope{
+                    address: address,
+                    tok: *tok,
+                    msg: ByteBuf::from_slice(msg.bytes()),
+                },
+            &EventLoopMessage::AddPeer(ref peer) =>
+                EventLoopMessage::AddPeer(peer.clone()),
         }
     }
 }
 
 pub trait SendChannel: Send {
     type Result;
-    fn send_msg(&self, msg: Envelope) -> Self::Result;
+    fn send_msg(&self, msg: EventLoopMessage) -> Self::Result;
     fn clone_chan(&self) -> Self;
 }
 
-impl SendChannel for mio::Sender<Envelope> {
-    type Result=Result<(), NotifyError<Envelope>>;
+impl SendChannel for mio::Sender<EventLoopMessage> {
+    type Result=Result<(), NotifyError<EventLoopMessage>>;
 
-    fn send_msg(&self, msg: Envelope) -> Self::Result {
+    fn send_msg(&self, msg: EventLoopMessage) -> Self::Result {
         self.send(msg)
     }
 
@@ -71,10 +79,10 @@ impl SendChannel for mio::Sender<Envelope> {
     }
 }
 
-impl SendChannel for Sender<Envelope> {
-    type Result=Result<(), SendError<Envelope>>;
+impl SendChannel for Sender<EventLoopMessage> {
+    type Result=Result<(), SendError<EventLoopMessage>>;
 
-    fn send_msg(&self, msg: Envelope) -> Self::Result {
+    fn send_msg(&self, msg: EventLoopMessage) -> Self::Result {
         self.send(msg)
     }
 

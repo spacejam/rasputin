@@ -10,7 +10,7 @@ use std::sync::mpsc::Sender;
 use log::LogLevel;
 use docopt::Docopt;
 
-use rasputin::server::{Server, Envelope};
+use rasputin::server::{Server, EventLoopMessage};
 use rasputin::RealClock;
 
 static USAGE: &'static str = "
@@ -63,10 +63,10 @@ fn main() {
         .collect();
 
     if args.flag_initialize {
-        Server::<RealClock, Sender<Envelope>>
+        Server::<RealClock, Sender<EventLoopMessage>>
               ::initialize_meta(storage_dir, peer_addr, seed_peers);
     } else {
-        Server::<RealClock, Sender<Envelope>>
+        Server::<RealClock, Sender<EventLoopMessage>>
               ::run(storage_dir, peer_addr, cli_addr, seed_peers)
     }
 }

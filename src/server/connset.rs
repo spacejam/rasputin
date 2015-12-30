@@ -7,7 +7,7 @@ use mio::{EventLoop, EventSet, PollOpt, Token};
 use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
 
-use server::Envelope;
+use server::EventLoopMessage;
 use server::server_conn::ServerConn;
 use server::traffic_cop::TrafficCop;
 
@@ -15,7 +15,7 @@ pub struct ConnSet {
     pub srv_sock: TcpListener,
     pub srv_token: Token,
     pub conns: Slab<ServerConn>,
-    pub req_tx: Sender<Envelope>,
+    pub req_tx: Sender<EventLoopMessage>,
 }
 
 impl ConnSet {

@@ -12,8 +12,8 @@ use protobuf::{self, Message};
 use {Append, AppendRes, CASRes, CliReq, CliRes, Clock, CollectionKind, DelRes,
      GetRes, Mutation, MutationType, PeerMsg, RedirectRes, SetRes, Version,
      VoteReq, VoteRes};
-use server::{AckedLog, InMemoryLog, Envelope, LEADER_DURATION, PeerID, RepPeer,
-             SendChannel, State, Store, TXID, Term};
+use server::{AckedLog, InMemoryLog, LEADER_DURATION, PeerID, RepPeer,
+             SendChannel, State, Store, TXID, Term, EventLoopMessage};
 
 pub struct Range<C: Clock, S: SendChannel> {
     pub id: PeerID,
@@ -28,7 +28,7 @@ pub struct Range<C: Clock, S: SendChannel> {
     pub max_generated_txid: TXID,
     pub highest_term: Term,
     pub state: State,
-    pub pending: BTreeMap<TXID, (Envelope, u64)>,
+    pub pending: BTreeMap<TXID, (EventLoopMessage, u64)>,
     pub rpc_tx: Box<S>,
 }
 
@@ -47,6 +47,8 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
            state: State,
            rpc_tx: S)
            -> Range<C, S> {
+
+        debug!("creating a new range [{:?} -> {:?}] with members {:?}", lower, upper, peers);
 
         let mut rep_log = Box::new(InMemoryLog {
             pending: BTreeMap::new(),
@@ -111,12 +113,21 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
     }
 
     fn handle_vote_res(&mut self,
-                       env: Envelope,
+                       elm: EventLoopMessage,
                        peer_id: PeerID,
                        vote_res: &VoteRes) {
+        let (address, tok, msg) = match elm {
+            EventLoopMessage::Envelope{address, tok, msg} => (address, tok, msg),
+            _ => {
+                error!("received non-envelope message in handle_peer!");
+                return;
+            },
+        };
+
         debug!("{} got response for vote request from {}",
                self.id,
-               env.address.unwrap());
+               address.unwrap());
+
         let term = self.state.term();
 
         if term.is_none() || vote_res.get_term() != term.unwrap() {
@@ -151,12 +162,12 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
                     ref have,
                 } => {
                                  let mut new_have = have.clone();
-                                 if !new_have.contains(&env.tok) &&
+                                 if !new_have.contains(&tok) &&
                                     vote_res.get_term() == term {
-                                     new_have.push(env.tok);
+                                     new_have.push(tok);
                                      self.update_rep_peers(peer_id,
-                                                           env.address,
-                                                           env.tok);
+                                                           address,
+                                                           tok);
                                  }
                                  if new_have.len() >= need as usize {
                                      // we've ascended to leader!
@@ -199,12 +210,12 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
                    } => {
                                  let mut new_until = until;
                                  let mut new_have = have.clone();
-                                 if !new_have.contains(&env.tok) &&
+                                 if !new_have.contains(&tok) &&
                                     vote_res.get_term() == term {
-                                     new_have.push(env.tok);
+                                     new_have.push(tok);
                                      self.update_rep_peers(peer_id,
-                                                           env.address,
-                                                           env.tok);
+                                                           address,
+                                                           tok);
                                  }
                                  if new_have.len() >= need as usize {
                                      debug!("{} leadership extended", self.id);
@@ -240,9 +251,17 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
     }
 
     fn handle_vote_req(&mut self,
-                       env: Envelope,
+                       elm: EventLoopMessage,
                        peer_id: PeerID,
                        vote_req: &VoteReq) {
+        let (address, tok, msg) = match elm.clone() {
+            EventLoopMessage::Envelope{address, tok, msg} => (address, tok, msg),
+            _ => {
+                error!("received non-envelope message in handle_peer!");
+                return;
+            },
+        };
+
         let mut res = PeerMsg::new();
         res.set_srvid(self.id.clone());
         let mut vote_res = VoteRes::new();
@@ -282,8 +301,8 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
             self.state = State::Follower {
                 id: peer_id.clone(),
                 term: vote_req.get_term(),
-                tok: env.tok,
-                leader_addr: env.address.unwrap(),
+                tok: tok,
+                leader_addr: address.unwrap(),
                 until: self.clock.now().add(*LEADER_DURATION),
             };
             info!("{:?}", self.state);
@@ -297,13 +316,22 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
             vote_res.set_success(false);
         }
         res.set_vote_res(vote_res);
-        self.reply(env, ByteBuf::from_slice(&*res.write_to_bytes().unwrap()));
+        self.reply(elm, ByteBuf::from_slice(&*res.write_to_bytes().unwrap()));
     }
 
     fn handle_append(&mut self,
-                     env: Envelope,
+                     elm: EventLoopMessage,
                      peer_id: PeerID,
                      append: &Append) {
+
+        let (address, tok, msg) = match elm.clone() {
+            EventLoopMessage::Envelope{address, tok, msg} => (address, tok, msg),
+            _ => {
+                error!("received non-envelope message in handle_peer!");
+                return;
+            },
+        };
+
         if self.state.is_leader() {
             warn!("Leader got append request!  This shouldn't happen.");
             return;
@@ -372,13 +400,22 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
 
         res.set_append_res(append_res);
 
-        self.reply(env, ByteBuf::from_slice(&*res.write_to_bytes().unwrap()));
+        self.reply(elm, ByteBuf::from_slice(&*res.write_to_bytes().unwrap()));
     }
 
     fn handle_append_res(&mut self,
-                         env: Envelope,
+                         elm: EventLoopMessage,
                          peer_id: PeerID,
                          append_res: &AppendRes) {
+
+        let (address, tok, msg) = match elm {
+            EventLoopMessage::Envelope{address, tok, msg} => (address, tok, msg),
+            _ => {
+                error!("received non-envelope message in handle_peer!");
+                return;
+            },
+        };
+
         // verify that we are leading
         if !self.state.is_leader() {
             return;
@@ -412,23 +449,31 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
         }
     }
 
-    pub fn handle_peer(&mut self, env: Envelope) {
-        let peer_msg: PeerMsg = protobuf::parse_from_bytes(env.msg.bytes())
+    pub fn handle_peer(&mut self, elm: EventLoopMessage) {
+        let (address, tok, msg) = match elm.clone() {
+            EventLoopMessage::Envelope{address, tok, msg} => (address, tok, msg),
+            _ => {
+                error!("received non-envelope message in handle_peer!");
+                return;
+            },
+        };
+
+        let peer_msg: PeerMsg = protobuf::parse_from_bytes(msg.bytes())
                                     .unwrap();
         let peer_id = peer_msg.get_srvid();
 
         if peer_msg.has_vote_res() {
-            self.handle_vote_res(env,
+            self.handle_vote_res(elm,
                                  peer_id.to_string(),
                                  peer_msg.get_vote_res());
         } else if peer_msg.has_vote_req() {
-            self.handle_vote_req(env,
+            self.handle_vote_req(elm,
                                  peer_id.to_string(),
                                  peer_msg.get_vote_req());
         } else if peer_msg.has_append() {
-            self.handle_append(env, peer_id.to_string(), peer_msg.get_append());
+            self.handle_append(elm, peer_id.to_string(), peer_msg.get_append());
         } else if peer_msg.has_append_res() {
-            self.handle_append_res(env,
+            self.handle_append_res(elm,
                                    peer_id.to_string(),
                                    peer_msg.get_append_res());
         } else {
@@ -600,12 +645,12 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
         // TODO(tyler) use persisted crash-proof logic
         let pending = self.pending.remove(&txid);
         match pending {
-            Some((env, req_id)) => {
+            Some((elm, req_id)) => {
                 info!("found pending listener");
                 // If there's a pending client request associated with this,
                 // then send them a response.
                 res.set_req_id(req_id);
-                self.reply(env,
+                self.reply(elm,
                            ByteBuf::from_slice(&*res.write_to_bytes()
                                                     .unwrap()));
             }
@@ -656,7 +701,7 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
 
     fn peer_broadcast(&mut self, msg: ByteBuf) {
         for (_id, peer) in self.rep_peers.iter() {
-            self.rpc_tx.send_msg(Envelope {
+            self.rpc_tx.send_msg(EventLoopMessage::Envelope {
                 address: peer.addr,
                 tok: peer.tok,
                 msg: ByteBuf::from_slice(&*msg.bytes()),
@@ -709,7 +754,7 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
                 peer_msg.set_srvid(self.id.clone());
                 peer_msg.set_append(append);
 
-                self.rpc_tx.send_msg(Envelope {
+                self.rpc_tx.send_msg(EventLoopMessage::Envelope {
                     address: peer.addr,
                     tok: peer.tok,
                     msg: ByteBuf::from_slice(&*peer_msg.write_to_bytes()
@@ -728,16 +773,32 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
         debug!("peers: {:?}", peer_ids);
     }
 
-    fn reply(&mut self, req: Envelope, res_buf: ByteBuf) {
-        self.rpc_tx.send_msg(Envelope {
-            address: req.address,
-            tok: req.tok,
+    fn reply(&mut self, elm: EventLoopMessage, res_buf: ByteBuf) {
+        let (address, tok, msg) = match elm {
+            EventLoopMessage::Envelope{address, tok, msg} => (address, tok, msg),
+            _ => {
+                error!("received non-envelope message in handle_peer!");
+                return;
+            },
+        };
+
+        self.rpc_tx.send_msg(EventLoopMessage::Envelope {
+            address: address,
+            tok: tok,
             msg: res_buf,
         });
     }
 
-    fn handle_cli(&mut self, req: Envelope) {
-        let cli_req: CliReq = protobuf::parse_from_bytes(req.msg.bytes())
+    fn handle_cli(&mut self, elm: EventLoopMessage) {
+        let (address, tok, msg) = match elm.clone() {
+            EventLoopMessage::Envelope{address, tok, msg} => (address, tok, msg),
+            _ => {
+                error!("received non-envelope message in handle_peer!");
+                return;
+            },
+        };
+
+        let cli_req: CliReq = protobuf::parse_from_bytes(msg.bytes())
                                   .unwrap();
         let mut res = CliRes::new();
         res.set_req_id(cli_req.get_req_id());
@@ -799,7 +860,7 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
             mutation.set_value(set_req.get_value().to_vec());
 
             info!("adding pending entry for txid {}", txid);
-            self.pending.insert(txid, (req, cli_req.get_req_id()));
+            self.pending.insert(txid, (elm, cli_req.get_req_id()));
             self.replicate(vec![mutation]);
             // send a response later after this txid is learned
             return;
@@ -819,7 +880,7 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
             mutation.set_value(cas_req.get_new_value().to_vec());
             mutation.set_old_value(cas_req.get_old_value().to_vec());
 
-            self.pending.insert(txid, (req, cli_req.get_req_id()));
+            self.pending.insert(txid, (elm, cli_req.get_req_id()));
             self.replicate(vec![mutation]);
             // send a response later after this txid is learned
             return;
@@ -837,13 +898,13 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
             mutation.set_version(version);
             mutation.set_key(cli_req.get_key().to_vec());
 
-            self.pending.insert(txid, (req, cli_req.get_req_id()));
+            self.pending.insert(txid, (elm, cli_req.get_req_id()));
             self.replicate(vec![mutation]);
             // send a response later after this txid is learned
             return;
         }
 
-        self.reply(req, ByteBuf::from_slice(&*res.write_to_bytes().unwrap()));
+        self.reply(elm, ByteBuf::from_slice(&*res.write_to_bytes().unwrap()));
     }
 
     fn new_txid(&mut self) -> TXID {
