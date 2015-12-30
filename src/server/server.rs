@@ -16,25 +16,25 @@ use Client;
 use constants;
 use serialization::{Meta, RangeMeta, Replica, Collection, RetentionPolicy,
                     CollectionType, HaveMetaRes};
-use {CliReq, CliRes, Clock, PeerMsg, RealClock};
-use server::{Envelope, KV, PeerID, Range, SendChannel};
+use {CliReq, CliRes, Clock, PeerMsg, RealClock, CollectionKind};
+use server::{Envelope, KV, PeerID, Range, SendChannel, State};
 use server::traffic_cop::TrafficCop;
 use server::storage::kv::upper_bound;
 
-pub struct Server<C: Clock, RE> {
+pub struct Server<C: Clock, S: SendChannel> {
     pub clock: Arc<C>,
     pub local_peer_addr: String,
     pub local_cli_addr: String,
     pub id: PeerID,
-    pub rpc_tx: Box<SendChannel<Envelope, RE> + Send>,
-    pub ranges: BTreeMap<Vec<u8>, Range<C, RE>>,
     pub kv: Arc<KV>,
     pub has_seen_meta: bool,
+    pub ranges: BTreeMap<Vec<u8>, Range<C, S>>,
+    pub rpc_tx: S,
 }
 
-unsafe impl<C: Clock, RE> Sync for Server<C, RE>{}
+unsafe impl<C: Clock, S: SendChannel> Sync for Server<C, S>{}
 
-impl<C: Clock, RE> Server<C, RE> {
+impl<C: Clock, S: SendChannel> Server<C, S> {
     pub fn initialize_meta(storage_dir: String,
                            local_peer_addr: String,
                            peers: Vec<String>) {
@@ -74,11 +74,35 @@ impl<C: Clock, RE> Server<C, RE> {
     }
 
     pub fn populate_meta(&mut self, cached_meta: Meta) -> io::Result<()> {
-        // create new range for meta
+        let meta_key = b"\x00\x00META";
+        let collection = cached_meta.get_collections().first().unwrap();
+        assert!(collection.get_prefix() == meta_key);
+        let range_meta = collection.get_ranges().first().unwrap();
+        assert!(range_meta.get_lower() == meta_key);
+
+        let mut peers = range_meta.get_replicas()
+                                  .iter()
+                                  .map(|r| r.get_address().to_string())
+                                  .collect();
+
+        let mut range = Range::initial(
+            self.id.clone(),
+            self.clock.clone(),
+            CollectionKind::KV,
+            meta_key.to_vec(),
+            upper_bound(meta_key).to_vec(),
+            self.kv.clone(),
+            peers,
+            BTreeMap::new(),
+            State::Init,
+            self.rpc_tx.clone_chan());
+
+        // persist its metadata to local_meta LOCAL_RANGES
 
         // add it to self.ranges
 
         // tell traffic cop to 
+        Ok(())
     }
 
     pub fn run(storage_dir: String,
@@ -134,7 +158,7 @@ impl<C: Clock, RE> Server<C, RE> {
             local_peer_addr: local_peer_addr.clone(),
             local_cli_addr: local_cli_addr,
             id: Uuid::new_v4().to_string(), // TODO(tyler) read from rocksdb
-            rpc_tx: Box::new(rpc_tx),
+            rpc_tx: rpc_tx,
             kv: kv.clone(),
             ranges: BTreeMap::new(),
             has_seen_meta: false,
@@ -167,9 +191,11 @@ impl<C: Clock, RE> Server<C, RE> {
         let cached_meta = kv.get_meta().unwrap();
         let is_seeding = should_seed(cached_meta.clone(), local_peer_addr.clone(), peers);
         if is_seeding {
-            warn!("initializing fresh meta range");
             match server.lock() {
-                Ok(mut srv) => srv.populate_meta(cached_meta.unwrap()),
+                Ok(mut srv) => {
+                    warn!("initializing fresh meta range");
+                    srv.populate_meta(cached_meta.unwrap());
+                },
                 Err(e) => {
                     error!("{}", e);
                     process::exit(1);
@@ -179,6 +205,7 @@ impl<C: Clock, RE> Server<C, RE> {
             warn!("waiting on peers to tell us of our schemas, which we will cross-reference with
             what we have on-disk.");
             // TODO(tyler) implement backoff to seeds asking for META
+            process::exit(1);
         }
  
         // cli request handler thread
@@ -230,8 +257,8 @@ impl<C: Clock, RE> Server<C, RE> {
         panic!("A worker thread unexpectedly exited! Shutting down.");
     }
 
-    pub fn range_for_key<'a>(&self, key: &[u8]) -> Option<&Range<C, RE>> {
-        let ranges: Vec<&Range<C, RE>> = self.ranges
+    pub fn range_for_key<'a>(&self, key: &[u8]) -> Option<&Range<C, S>> {
+        let ranges: Vec<&Range<C, S>> = self.ranges
                                              .values()
                                              .filter(|r| {
                                                  &*r.lower <= key &&
@@ -247,7 +274,7 @@ impl<C: Clock, RE> Server<C, RE> {
 
     pub fn range_for_key_mut(&mut self,
                              key: &[u8])
-                             -> Option<&mut Range<C, RE>> {
+                             -> Option<&mut Range<C, S>> {
         let key: Vec<u8> = {
             let mut ranges: Vec<&Vec<u8>> = self.ranges
                                                 .iter_mut()

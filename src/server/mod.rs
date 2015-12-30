@@ -53,19 +53,33 @@ impl Clone for Envelope {
     }
 }
 
-pub trait SendChannel<M: Send, E> {
-    fn send_msg(&self, msg: M) -> E;
+pub trait SendChannel: Send {
+    type Result;
+    fn send_msg(&self, msg: Envelope) -> Self::Result;
+    fn clone_chan(&self) -> Self;
 }
 
-impl<M: Send> SendChannel<M, Result<(), NotifyError<M>>> for mio::Sender<M> {
-    fn send_msg(&self, msg: M) -> Result<(), NotifyError<M>> {
+impl SendChannel for mio::Sender<Envelope> {
+    type Result=Result<(), NotifyError<Envelope>>;
+
+    fn send_msg(&self, msg: Envelope) -> Self::Result {
         self.send(msg)
+    }
+
+    fn clone_chan(&self) -> Self {
+        self.clone()
     }
 }
 
-impl<M: Send> SendChannel<M, Result<(), SendError<M>>> for Sender<M> {
-    fn send_msg(&self, msg: M) -> Result<(), SendError<M>> {
+impl SendChannel for Sender<Envelope> {
+    type Result=Result<(), SendError<Envelope>>;
+
+    fn send_msg(&self, msg: Envelope) -> Self::Result {
         self.send(msg)
+    }
+
+    fn clone_chan(&self) -> Self {
+        self.clone()
     }
 }
 

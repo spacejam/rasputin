@@ -5,7 +5,7 @@ extern crate docopt;
 extern crate log;
 extern crate rasputin;
 
-use std::sync::mpsc::SendError;
+use std::sync::mpsc::Sender;
 
 use log::LogLevel;
 use docopt::Docopt;
@@ -63,18 +63,11 @@ fn main() {
         .collect();
 
     if args.flag_initialize {
-        Server::<RealClock,
-                 Result<(),
-                 SendError<Envelope>>>::initialize_meta(storage_dir,
-                                                        peer_addr,
-                                                        seed_peers);
+        Server::<RealClock, Sender<Envelope>>
+              ::initialize_meta(storage_dir, peer_addr, seed_peers);
     } else {
-        Server::<RealClock,
-                 Result<(),
-                 SendError<Envelope>>>::run(storage_dir,
-                                            peer_addr,
-                                            cli_addr,
-                                            seed_peers)
+        Server::<RealClock, Sender<Envelope>>
+              ::run(storage_dir, peer_addr, cli_addr, seed_peers)
     }
 }
 

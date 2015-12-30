@@ -15,7 +15,7 @@ use {Append, AppendRes, CASRes, CliReq, CliRes, Clock, CollectionKind, DelRes,
 use server::{AckedLog, InMemoryLog, Envelope, LEADER_DURATION, PeerID, RepPeer,
              SendChannel, State, Store, TXID, Term};
 
-pub struct Range<C: Clock, RE> {
+pub struct Range<C: Clock, S: SendChannel> {
     pub id: PeerID,
     pub clock: Arc<C>,
     pub kind: CollectionKind,
@@ -28,15 +28,15 @@ pub struct Range<C: Clock, RE> {
     pub max_generated_txid: TXID,
     pub highest_term: Term,
     pub state: State,
-    pub rpc_tx: Box<SendChannel<Envelope, RE> + Send + Copy>,
     pub pending: BTreeMap<TXID, (Envelope, u64)>,
+    pub rpc_tx: Box<S>,
 }
 
-unsafe impl<C: Clock, RE> Sync for Range<C, RE>{}
+unsafe impl<C: Clock, S: SendChannel> Sync for Range<C, S>{}
 
-impl<C: Clock, RE> Range<C, RE> {
+impl<C: Clock, S: SendChannel> Range<C, S> {
     
-    fn new(id: PeerID,
+    pub fn initial(id: PeerID,
            clock: Arc<C>,
            kind: CollectionKind,
            lower: Vec<u8>,
@@ -44,19 +44,18 @@ impl<C: Clock, RE> Range<C, RE> {
            store: Arc<Store + Send + Sync>,
            peers: Vec<String>,
            rep_peers: BTreeMap<PeerID, RepPeer>,
-           max_generated_txid: TXID,
-           highest_term: Term,
            state: State,
-           rpc_tx: Box<SendChannel<Envelope, RE> + Send>)
-           -> Range<C, RE> {
+           rpc_tx: S)
+           -> Range<C, S> {
 
         let mut rep_log = Box::new(InMemoryLog {
             pending: BTreeMap::new(),
             committed: BTreeMap::new(),
             quorum: peers.len() / 2 + 1,
-            last_learned_txid: 0, // TODO(tyler) read from rocksdb
-            last_learned_term: 0, // TODO(tyler) read from rocksdb
-            last_accepted_txid: 0, // TODO(tyler) read from rocksdb last_accepted_term: 0, // TODO(tyler) read from rocksdb
+            last_learned_txid: 0,
+            last_accepted_txid: 0,
+            last_learned_term: 0,
+            last_accepted_term: 0,
         });
         
         Range {
@@ -66,11 +65,14 @@ impl<C: Clock, RE> Range<C, RE> {
             lower: lower,
             upper: upper,
             store: store,
+            peers: peers,
             rep_log: rep_log,
-            max_generated_txid: max_generated_txid,
-            highest_term: highest_term,
+            rep_peers: rep_peers,
+            max_generated_txid: 0,
+            highest_term: 0,
             state: state,
-            rpc_tx: rpc_tx,
+            rpc_tx: Box::new(rpc_tx),
+            pending: BTreeMap::new(),
         }
     }
 
