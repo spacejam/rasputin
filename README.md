@@ -1,5 +1,7 @@
 # Rasputin DB :globe_with_meridians:
 
+(Significant work is currently happening in the `tyler_ranges` branch)
+
 flexible linearizable distributed store
 
 triumvirs: operational clarity, performance and composability
