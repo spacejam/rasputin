@@ -90,6 +90,7 @@ impl<C: Clock, S: SendChannel> Server<C, S> {
                                   })
                                   .collect();
 
+        // Create the range
         let mut range = Range::initial(
             self.id.clone(),
             self.clock.clone(),
@@ -102,9 +103,10 @@ impl<C: Clock, S: SendChannel> Server<C, S> {
             State::Init,
             self.rpc_tx.clone_chan());
 
-        // persist its metadata to local_meta LOCAL_RANGES
+        // persist the META metadata to local_meta RANGES key
 
         // add it to self.ranges
+        self.ranges.insert(meta_key.to_vec(), range);
 
         Ok(())
     }
@@ -270,8 +272,11 @@ impl<C: Clock, S: SendChannel> Server<C, S> {
                                              })
                                              .collect();
         if ranges.len() == 1 {
+            debug!("routing key request {:?} to range [ {:?} -> {:?} ]", key, ranges[0].lower,
+                   ranges[0].upper);
             Some(ranges[0])
         } else {
+            warn!("found no range for key {:?}!", key);
             None
         }
     }
@@ -289,9 +294,10 @@ impl<C: Clock, S: SendChannel> Server<C, S> {
                                                 .map(|(k, _)| k)
                                                 .collect();
             if ranges.len() == 1 {
+                debug!("routing key request {:?} to range with lower {:?}", key, ranges[0]);
                 ranges[0].clone()
             } else {
-                error!("Found several matching range keys in \
+                error!("Found none or several matching range keys in \
                         range_for_key_mut!");
                 return None;
             }
@@ -301,10 +307,10 @@ impl<C: Clock, S: SendChannel> Server<C, S> {
 
     fn reply(&mut self, elm: EventLoopMessage, res_buf: ByteBuf) {
         match elm {
-            EventLoopMessage::Envelope {address, tok, msg} => {
+            EventLoopMessage::Envelope {address, session, msg} => {
                 self.rpc_tx.send_msg(EventLoopMessage::Envelope {
                     address: address,
-                    tok: tok,
+                    session: session,
                     msg: res_buf,
                 });
             },
@@ -313,6 +319,7 @@ impl<C: Clock, S: SendChannel> Server<C, S> {
     }
 
     pub fn handle_peer(&mut self, elm: EventLoopMessage) {
+        info!("in handle_peer");
         let msg = match elm.clone() {
             EventLoopMessage::Envelope{msg, ..} => msg,
             _ => {

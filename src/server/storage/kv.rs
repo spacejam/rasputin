@@ -44,9 +44,9 @@ impl KV {
     }
 
     pub fn persist_meta(&self, meta: &Meta) -> io::Result<()> {
-        let cf = *self.db.cf_handle("local_meta").unwrap();
+        let cf = *self.db.cf_handle("storage").unwrap();
         let data = &*meta.write_to_bytes().unwrap();
-        match self.db.put_cf(cf, b"meta", data) {
+        match self.db.put_cf(cf, b"\x00\x00META", data) {
             Ok(()) => Ok(()),
             Err(e) => {
                 panic!(e);
@@ -55,8 +55,8 @@ impl KV {
     }
 
     pub fn get_meta(&self) -> io::Result<Option<Meta>> {
-        let cf = *self.db.cf_handle("local_meta").unwrap();
-        match self.db.get_cf(cf, b"meta") {
+        let cf = *self.db.cf_handle("storage").unwrap();
+        match self.db.get_cf(cf, b"\x00\x00META") {
             Ok(None) => Ok(None),
             Ok(Some(data)) => {
                 let meta: Meta = protobuf::parse_from_bytes(&*data).unwrap();

@@ -35,12 +35,13 @@ lazy_static! {
 
 pub type TXID = u64;
 pub type Term = u64;
+pub type Session = u64;
 pub type PeerID = String;
 
 pub enum EventLoopMessage {
     Envelope {
         address: Option<SocketAddr>,
-        tok: Token,
+        session: Session,
         msg: ByteBuf,
     },
     AddPeer(String),
@@ -49,10 +50,10 @@ pub enum EventLoopMessage {
 impl Clone for EventLoopMessage {
     fn clone(&self) -> Self {
         match self {
-            &EventLoopMessage::Envelope{address, ref tok, ref msg} =>
+            &EventLoopMessage::Envelope{address, ref session, ref msg} =>
                 EventLoopMessage::Envelope{
                     address: address,
-                    tok: *tok,
+                    session: *session,
                     msg: ByteBuf::from_slice(msg.bytes()),
                 },
             &EventLoopMessage::AddPeer(ref peer) =>
@@ -102,7 +103,7 @@ pub struct RepPeer {
     last_accepted_term: Term,
     last_accepted_txid: TXID,
     max_sent_txid: TXID,
-    tok: Token,
+    session: Session,
     id: PeerID,
     addr: Option<SocketAddr>,
 }
@@ -111,20 +112,20 @@ pub struct RepPeer {
 pub enum State {
     Leader {
         term: Term,
-        have: Vec<Token>,
+        have: Vec<Session>,
         need: u8,
         until: time::Timespec,
     },
     Candidate {
         term: Term,
-        have: Vec<Token>,
+        have: Vec<Session>,
         need: u8,
         until: time::Timespec,
     },
     Follower {
         term: Term,
         id: PeerID,
-        tok: Token,
+        session: Session,
         leader_addr: SocketAddr,
         until: time::Timespec,
     },

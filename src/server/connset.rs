@@ -1,5 +1,6 @@
 use std::io::{Error, ErrorKind};
 use std::io;
+use std::net::SocketAddr;
 use std::sync::mpsc::Sender;
 
 use mio;
@@ -7,7 +8,7 @@ use mio::{EventLoop, EventSet, PollOpt, Token};
 use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
 
-use server::EventLoopMessage;
+use server::{EventLoopMessage, Session};
 use server::server_conn::ServerConn;
 use server::traffic_cop::TrafficCop;
 
@@ -20,21 +21,30 @@ pub struct ConnSet {
 
 impl ConnSet {
     pub fn accept(&mut self,
+                  session: Session,
                   event_loop: &mut EventLoop<TrafficCop>)
-                  -> io::Result<()> {
+                  -> io::Result<(SocketAddr, Token)> {
 
         debug!("ConnSet accepting socket");
 
         let sock = try!(self.srv_sock.accept());
-        self.register(sock.unwrap(), event_loop).map(|_| ())
+        self.register(sock.unwrap(), session, event_loop)
     }
 
     pub fn register(&mut self,
                     sock: TcpStream,
+                    session: Session,
                     event_loop: &mut EventLoop<TrafficCop>)
-                    -> io::Result<Token> {
+                    -> io::Result<(SocketAddr, Token)> {
 
-        let conn = ServerConn::new(sock, self.req_tx.clone());
+        let addr = match sock.peer_addr() {
+            Ok(addr) => addr,
+            Err(e) => {
+                warn!("could not get addr from socket: {}", e);
+                "0.0.0.0:0".parse().unwrap()
+            }
+        };
+        let conn = ServerConn::new(sock, session, self.req_tx.clone());
 
         // Re-register accepting socket
         event_loop.reregister(&self.srv_sock,
@@ -53,7 +63,7 @@ impl ConnSet {
                                         PollOpt::edge() | PollOpt::oneshot())
                           .ok()
                           .expect("could not register socket with event loop");
-                tok
+                (addr, tok)
             })
             .or_else(|e| {
                 Err(Error::new(ErrorKind::Other, "All connection slots full."))

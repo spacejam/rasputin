@@ -6,11 +6,12 @@ use mio::{EventLoop, EventSet, PollOpt, Token, TryRead, TryWrite};
 use mio::tcp::TcpStream;
 
 use codec::{self, Codec};
-use server::EventLoopMessage;
+use server::{EventLoopMessage, Session};
 use server::traffic_cop::TrafficCop;
 
 pub struct ServerConn {
     pub sock: TcpStream,
+    pub session: Session,
     pub req_tx: Sender<EventLoopMessage>,
     pub res_bufs: Vec<ByteBuf>, // TODO(tyler) use proper dequeue
     pub res_remaining: usize,
@@ -20,9 +21,10 @@ pub struct ServerConn {
 }
 
 impl ServerConn {
-    pub fn new(sock: TcpStream, req_tx: Sender<EventLoopMessage>) -> ServerConn {
+    pub fn new(sock: TcpStream, session: Session, req_tx: Sender<EventLoopMessage>) -> ServerConn {
         ServerConn {
             sock: sock,
+            session: session,
             req_tx: req_tx,
             req_codec: codec::Framed::new(),
             res_bufs: vec![],
@@ -106,7 +108,7 @@ impl ServerConn {
         for req in self.req_codec.decode(&mut req_buf.flip()) {
             self.req_tx.send(EventLoopMessage::Envelope {
                 address: Some(self.sock.peer_addr().unwrap()),
-                tok: self.token.unwrap(),
+                session: self.session,
                 msg: req,
             });
         }

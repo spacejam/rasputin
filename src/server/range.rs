@@ -6,14 +6,13 @@ use std::sync::mpsc;
 use std::thread;
 
 use bytes::{Buf, ByteBuf};
-use mio::Token;
 use protobuf::{self, Message};
 
 use {Append, AppendRes, CASRes, CliReq, CliRes, Clock, CollectionKind, DelRes,
      GetRes, Mutation, MutationType, PeerMsg, RedirectRes, SetRes, Version,
      VoteReq, VoteRes};
 use server::{AckedLog, InMemoryLog, LEADER_DURATION, PeerID, RepPeer,
-             SendChannel, State, Store, TXID, Term, EventLoopMessage};
+             SendChannel, State, Store, TXID, Term, EventLoopMessage, Session};
 
 pub struct Range<C: Clock, S: SendChannel> {
     pub id: PeerID,
@@ -81,7 +80,7 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
     fn update_rep_peers(&mut self,
                         peer_id: PeerID,
                         addr: Option<SocketAddr>,
-                        tok: Token) {
+                        session: Session) {
         // don't send replication traffic to self
         if self.id == peer_id {
             return;
@@ -97,7 +96,7 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
                                                       .last_accepted_txid(),
                               last_accepted_term: self.rep_log
                                                       .last_accepted_term(),
-                              tok: tok,
+                              session: session,
                               id: peer_id.clone(),
                               addr: addr,
                           }) {
@@ -116,8 +115,8 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
                        elm: EventLoopMessage,
                        peer_id: PeerID,
                        vote_res: &VoteRes) {
-        let (address, tok, msg) = match elm {
-            EventLoopMessage::Envelope{address, tok, msg} => (address, tok, msg),
+        let (address, session, msg) = match elm {
+            EventLoopMessage::Envelope{address, session, msg} => (address, session, msg),
             _ => {
                 error!("received non-envelope message in handle_peer!");
                 return;
@@ -162,12 +161,12 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
                     ref have,
                 } => {
                                  let mut new_have = have.clone();
-                                 if !new_have.contains(&tok) &&
+                                 if !new_have.contains(&session) &&
                                     vote_res.get_term() == term {
-                                     new_have.push(tok);
+                                     new_have.push(session);
                                      self.update_rep_peers(peer_id,
                                                            address,
-                                                           tok);
+                                                           session);
                                  }
                                  if new_have.len() >= need as usize {
                                      // we've ascended to leader!
@@ -210,12 +209,12 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
                    } => {
                                  let mut new_until = until;
                                  let mut new_have = have.clone();
-                                 if !new_have.contains(&tok) &&
+                                 if !new_have.contains(&session) &&
                                     vote_res.get_term() == term {
-                                     new_have.push(tok);
+                                     new_have.push(session);
                                      self.update_rep_peers(peer_id,
                                                            address,
-                                                           tok);
+                                                           session);
                                  }
                                  if new_have.len() >= need as usize {
                                      debug!("{} leadership extended", self.id);
@@ -254,8 +253,8 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
                        elm: EventLoopMessage,
                        peer_id: PeerID,
                        vote_req: &VoteReq) {
-        let (address, tok, msg) = match elm.clone() {
-            EventLoopMessage::Envelope{address, tok, msg} => (address, tok, msg),
+        let (address, session, msg) = match elm.clone() {
+            EventLoopMessage::Envelope{address, session, msg} => (address, session, msg),
             _ => {
                 error!("received non-envelope message in handle_peer!");
                 return;
@@ -264,6 +263,7 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
 
         let mut res = PeerMsg::new();
         res.set_srvid(self.id.clone());
+        res.set_range_prefix(self.lower.clone());
         let mut vote_res = VoteRes::new();
         vote_res.set_term(vote_req.get_term());
 
@@ -284,12 +284,12 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
             // if we're already following this node, keed doing so
             debug!("{} extending followership of {}", self.id, peer_id);
             self.state = match self.state {
-                             State::Follower{term, ref id, leader_addr, tok, ..} => Some(State::Follower {
+                             State::Follower{term, ref id, leader_addr, session, ..} => Some(State::Follower {
                     term: term,
                     id: id.clone(),
                     leader_addr: leader_addr,
                     until: self.clock.now().add(*LEADER_DURATION),
-                    tok: tok,
+                    session: session,
                 }),
                              _ => None,
                          }
@@ -301,7 +301,7 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
             self.state = State::Follower {
                 id: peer_id.clone(),
                 term: vote_req.get_term(),
-                tok: tok,
+                session: session,
                 leader_addr: address.unwrap(),
                 until: self.clock.now().add(*LEADER_DURATION),
             };
@@ -324,8 +324,8 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
                      peer_id: PeerID,
                      append: &Append) {
 
-        let (address, tok, msg) = match elm.clone() {
-            EventLoopMessage::Envelope{address, tok, msg} => (address, tok, msg),
+        let (address, session, msg) = match elm.clone() {
+            EventLoopMessage::Envelope{address, session, msg} => (address, session, msg),
             _ => {
                 error!("received non-envelope message in handle_peer!");
                 return;
@@ -339,6 +339,7 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
 
         let mut res = PeerMsg::new();
         res.set_srvid(self.id.clone());
+        res.set_range_prefix(self.lower.clone());
         let mut append_res = AppendRes::new();
 
         // verify that we are following this node
@@ -408,8 +409,8 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
                          peer_id: PeerID,
                          append_res: &AppendRes) {
 
-        let (address, tok, msg) = match elm {
-            EventLoopMessage::Envelope{address, tok, msg} => (address, tok, msg),
+        let (address, session, msg) = match elm {
+            EventLoopMessage::Envelope{address, session, msg} => (address, session, msg),
             _ => {
                 error!("received non-envelope message in handle_peer!");
                 return;
@@ -450,8 +451,8 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
     }
 
     pub fn handle_peer(&mut self, elm: EventLoopMessage) {
-        let (address, tok, msg) = match elm.clone() {
-            EventLoopMessage::Envelope{address, tok, msg} => (address, tok, msg),
+        let (address, session, msg) = match elm.clone() {
+            EventLoopMessage::Envelope{address, session, msg} => (address, session, msg),
             _ => {
                 error!("received non-envelope message in handle_peer!");
                 return;
@@ -505,6 +506,7 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
             debug!("broadcasting VoteReq");
             let mut req = PeerMsg::new();
             req.set_srvid(self.id.clone());
+            req.set_range_prefix(self.lower.clone());
             let mut vote_req = VoteReq::new();
             vote_req.set_term(self.state.term().unwrap());
             vote_req.set_last_accepted_term(self.rep_log.last_accepted_term());
@@ -700,10 +702,12 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
     }
 
     fn peer_broadcast(&mut self, msg: ByteBuf) {
-        for (_id, peer) in self.rep_peers.iter() {
+        for peer in self.peers.iter() {
             self.rpc_tx.send_msg(EventLoopMessage::Envelope {
-                address: peer.addr,
-                tok: peer.tok,
+                address: Some(peer.parse().unwrap()),
+                session: 0, // TODO this is sort of a hack to tell
+                            //  the traffic_cop to use the last known
+                            //  session for this peer.
                 msg: ByteBuf::from_slice(&*msg.bytes()),
             });
         }
@@ -752,11 +756,12 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
 
                 let mut peer_msg = PeerMsg::new();
                 peer_msg.set_srvid(self.id.clone());
+                peer_msg.set_range_prefix(self.lower.clone());
                 peer_msg.set_append(append);
 
                 self.rpc_tx.send_msg(EventLoopMessage::Envelope {
                     address: peer.addr,
-                    tok: peer.tok,
+                    session: peer.session,
                     msg: ByteBuf::from_slice(&*peer_msg.write_to_bytes()
                                                        .unwrap()),
                 });
@@ -774,8 +779,8 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
     }
 
     fn reply(&mut self, elm: EventLoopMessage, res_buf: ByteBuf) {
-        let (address, tok, msg) = match elm {
-            EventLoopMessage::Envelope{address, tok, msg} => (address, tok, msg),
+        let (address, session, msg) = match elm {
+            EventLoopMessage::Envelope{address, session, msg} => (address, session, msg),
             _ => {
                 error!("received non-envelope message in handle_peer!");
                 return;
@@ -784,14 +789,14 @@ impl<C: Clock, S: SendChannel> Range<C, S> {
 
         self.rpc_tx.send_msg(EventLoopMessage::Envelope {
             address: address,
-            tok: tok,
+            session: session,
             msg: res_buf,
         });
     }
 
     fn handle_cli(&mut self, elm: EventLoopMessage) {
-        let (address, tok, msg) = match elm.clone() {
-            EventLoopMessage::Envelope{address, tok, msg} => (address, tok, msg),
+        let (address, session, msg) = match elm.clone() {
+            EventLoopMessage::Envelope{address, session, msg} => (address, session, msg),
             _ => {
                 error!("received non-envelope message in handle_peer!");
                 return;

@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
 use std::io::{Error, ErrorKind};
 use std::io;
+use std::net::SocketAddr;
 use std::sync::mpsc::Sender;
 
 use bytes::{Buf, ByteBuf, alloc};
@@ -13,6 +15,9 @@ use codec;
 
 pub struct TrafficCop {
     peers: Vec<Peer>,
+    address_to_last_session: BTreeMap<String, Session>,
+    sessions: BTreeMap<Session, Token>,
+    session_counter: u64,
     cli_handler: ConnSet,
     peer_handler: ConnSet,
 }
@@ -44,6 +49,9 @@ impl TrafficCop {
 
         Ok(TrafficCop {
             peers: peers,
+            address_to_last_session: BTreeMap::new(),
+            sessions: BTreeMap::new(),
+            session_counter: 1,
             cli_handler: ConnSet {
                 srv_sock: cli_srv_sock,
                 srv_token: SERVER_CLIENTS,
@@ -80,15 +88,25 @@ impl TrafficCop {
         Err(Error::new(ErrorKind::Other, "event_loop shouldn't have returned."))
     }
 
-    fn tok_to_sc(&mut self, tok: Token) -> Option<&mut ServerConn> {
+    fn session_to_sc(&mut self, session: Session) -> Option<&mut ServerConn> {
+        let tok_opt = self.sessions.get(&session);
+        if tok_opt.is_none() {
+            return None;
+        }
+        let tok = tok_opt.unwrap();
         if tok.as_usize() > 1 && tok.as_usize() <= 128 {
-            self.peer_handler.conns.get_mut(tok)
+            self.peer_handler.conns.get_mut(*tok)
         } else if tok.as_usize() > 128 && tok.as_usize() <= 4096 {
-            self.cli_handler.conns.get_mut(tok)
+            self.cli_handler.conns.get_mut(*tok)
         } else {
             error!("bad event loop notification message envelope");
             None
         }
+    }
+
+    fn new_session(&mut self) -> Session {
+        self.session_counter += 1;
+        self.session_counter
     }
 }
 
@@ -127,14 +145,24 @@ impl Handler for TrafficCop {
             match token {
                 SERVER_PEERS => {
                     debug!("got SERVER_PEERS accept");
-                    self.peer_handler.accept(event_loop).or_else(|e| {
+                    let session = self.new_session();
+                    self.peer_handler.accept(session, event_loop).map(|(addr, tok)| {
+                        self.sessions.insert(session, tok);
+                        let string_addr = format!("{:?}", addr);
+                        self.address_to_last_session.insert(string_addr, session);
+                    }).or_else(|e| {
                         error!("failed to accept peer: all slots full");
                         Err(e)
                     });
                 }
                 SERVER_CLIENTS => {
                     debug!("got SERVER_CLIENTS accept");
-                    self.cli_handler.accept(event_loop).or_else(|e| {
+                    let session = self.new_session();
+                    self.cli_handler.accept(session, event_loop).map(|(addr, tok)| {
+                        self.sessions.insert(session, tok);
+                        let string_addr = format!("{:?}", addr);
+                        self.address_to_last_session.insert(string_addr, session);
+                    }).or_else(|e| {
                         error!("failed to accept client: all slots full");
                         Err(e)
                     });
@@ -170,20 +198,27 @@ impl Handler for TrafficCop {
     fn timeout(&mut self,
                event_loop: &mut EventLoop<TrafficCop>,
                timeout: ()) {
-        for peer in self.peers.iter_mut() {
+        let mut peers = self.peers.clone();
+        for peer in peers.iter_mut() {
+            debug!("have peer {:?}", peer.addr);
             if peer.sock.is_none() {
-                debug!("reestablishing connection with peer");
+                debug!("reestablishing connection with peer {:?}", peer.addr);
                 let (sock, _) = TcpSocket::v4()
                                     .unwrap()
                                     .connect(&peer.addr)
                                     .unwrap();
-                self.peer_handler.register(sock, event_loop).map(|tok| {
+                let session = self.new_session();
+                self.peer_handler.register(sock, session, event_loop).map(|(addr, tok)| {
+                    self.sessions.insert(session, tok);
+                    let string_addr = format!("{:?}", peer.addr);
+                    self.address_to_last_session.insert(string_addr, session);
                     peer.sock = Some(tok);
                 });
             }
         }
-        debug!("have {:?} peer connections",
-               self.peer_handler.conns.count());
+        self.peers = peers;
+        debug!("have {:?} peer connections: {:?}",
+               self.peer_handler.conns.count(), self.peer_handler.conns);
         // if leader is None, try to get promise leases, following-up with
         // an abdication if we fail to get quorum after 2s (randomly picked).
 
@@ -216,10 +251,19 @@ impl Handler for TrafficCop {
                         error!("failed to parse peer address: {}", e),
                 }
             }
-            EventLoopMessage::Envelope{tok, msg, ..} => {
-                let sco = self.tok_to_sc(tok);
+            EventLoopMessage::Envelope{address, session, msg, ..} => {
+                let session = if session == 0 && address.is_some() {
+                    let addr = format!("{:?}", address.unwrap());
+                    match self.address_to_last_session.get(&*addr) {
+                        Some(&i) => i,
+                        _ => session,
+                    }
+                } else {
+                    session
+                };
+                let sco = self.session_to_sc(session);
                 if sco.is_none() {
-                    warn!("got notify for invalid token {}", tok.as_usize());
+                    warn!("got notify for disconnected peer {:?} with session {}", address, session);
                     return;
                 }
                 let mut sc = sco.unwrap();
@@ -237,17 +281,14 @@ impl Handler for TrafficCop {
                 assert!(res.write_slice(&codec::usize_to_array(m.len())) == 4);
                 assert!(res.write_slice(m) == m.len());
 
-                debug!("adding res to sc.res_bufs: {:?}", res.bytes());
-
                 sc.res_remaining += res.bytes().len();
                 sc.res_bufs.push(res.flip());
-
                 sc.interest.insert(EventSet::writable());
 
-                event_loop.reregister(&sc.sock,
-                                      tok,
-                                      sc.interest,
-                                      PollOpt::edge() | PollOpt::oneshot());
+                sc.token.map(|tok| event_loop.reregister(&sc.sock,
+                                                         tok,
+                                                         sc.interest,
+                                                         PollOpt::edge() | PollOpt::oneshot()));
             },
         }
     }
