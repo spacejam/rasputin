@@ -5,12 +5,12 @@ extern crate docopt;
 extern crate log;
 extern crate rasputin;
 
-use std::sync::mpsc::SendError;
+use std::sync::mpsc::Sender;
 
 use log::LogLevel;
 use docopt::Docopt;
 
-use rasputin::server::{Server, Envelope};
+use rasputin::server::{Server, EventLoopMessage};
 use rasputin::RealClock;
 
 static USAGE: &'static str = "
@@ -20,16 +20,17 @@ This program is the Rasputin DB server process.
 
 Usage:
     rasputind --help
-    rasputind [--cli-port=<listening port>] [--peer-port=<listening port>] [--seed-peers=<peers>] [--logfile=<file>] [--storage-dir=<directory>]
+    rasputind [--cli-addr=<listening addr>] [--peer-addr=<listening addr>] [--seed-peers=<peers>] [--logfile=<file>] [--storage-dir=<directory>] [--initialize]
 
 Options:
     --help                          Show this help message.
-    --cli-port=<port>               Listening port for communication between servers.
-    --peer-port=<port>              Listening port for communication with clients.
-    --seed-peers=<host1:port1,...>  List of comma-delimited initial peers, e.g:
+    --cli-addr=<addr>               Listening addr for communication between servers.
+    --peer-addr=<addr>              Listening addr for communication with clients.
+    --seed-peers=<host1:addr1,...>  List of comma-delimited initial peers, e.g:
                                     foo.baz.com:7777,bar.baz.com:7777
     --logfile=<path>                File to log output to instead of stdout.
     --storage-dir=<path>            Directory to store the persisted data in; defaults to /var/lib/rasputin
+    --initialize                    Initializes the cluster.  Should be done once on a seed node.
 ";
 
 fn main() {
@@ -37,17 +38,17 @@ fn main() {
         .and_then(|d| d.decode())
         .unwrap_or_else(|e| e.exit());
 
-    rasputin::logging::init_logger(args.flag_logfile, LogLevel::Info).unwrap();
+    rasputin::logging::init_logger(args.flag_logfile, LogLevel::Debug).unwrap();
     print_banner();
 
-    let peer_port: u16 = match args.flag_peer_port {
+    let peer_addr: String = match args.flag_peer_addr {
         Some(p) => p,
-        None => 7770,
+        None => "0.0.0.0:7770".to_string(),
     };
 
-    let cli_port: u16 = match args.flag_cli_port {
+    let cli_addr: String = match args.flag_cli_addr {
         Some(p) => p,
-        None => 8880,
+        None => "0.0.0.0:8880".to_string(),
     };
 
     let storage_dir: String = match args.flag_storage_dir {
@@ -61,18 +62,24 @@ fn main() {
         .filter(|s| s != "")
         .collect();
 
-    Server::<RealClock, Result<(), SendError<Envelope>>>
-          ::run(peer_port, cli_port, storage_dir, seed_peers);
+    if args.flag_initialize {
+        Server::<RealClock, Sender<EventLoopMessage>>
+              ::initialize_meta(storage_dir, peer_addr, seed_peers);
+    } else {
+        Server::<RealClock, Sender<EventLoopMessage>>
+              ::run(storage_dir, peer_addr, cli_addr, seed_peers)
+    }
 }
 
 #[derive(Debug, RustcDecodable)]
 struct Args {
     flag_help: bool,
-    flag_cli_port: Option<u16>,
-    flag_peer_port: Option<u16>,
+    flag_cli_addr: Option<String>,
+    flag_peer_addr: Option<String>,
     flag_seed_peers: String,
     flag_logfile: Option<String>,
     flag_storage_dir: Option<String>,
+    flag_initialize: bool,
 }
 
 fn print_banner() {

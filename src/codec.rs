@@ -85,7 +85,7 @@ impl Codec<ByteBuf, ByteBuf> for Framed {
                         res.push(msg.flip())
                     } else {
                         self.msg = Some(msg);
-                        break
+                        break;
                     }
                 }
                 _ => break,

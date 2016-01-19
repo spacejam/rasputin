@@ -3,37 +3,28 @@ mod connset;
 mod server_conn;
 mod traffic_cop;
 mod acked_log;
-pub mod rocksdb;
+mod storage;
+mod range;
 
 pub use server::server::Server;
+pub use server::range::Range;
 pub use server::connset::ConnSet;
 pub use server::server_conn::ServerConn;
 pub use server::acked_log::{AckedLog, InMemoryLog, LogEntry};
 
-use std::io::{Error, ErrorKind};
-use std::io;
-use std::net::SocketAddr;
-use std::ops::{Add, Sub};
-use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{self, Receiver, SendError, Sender};
-use std::thread;
-use std::usize;
+pub use server::storage::{KV, Log, Store, VFS};
 
-use bytes::{Buf, ByteBuf, MutByteBuf, SliceBuf, alloc};
+use std::net::SocketAddr;
+use std::ops::Add;
+use std::sync::mpsc::{SendError, Sender};
+
+use bytes::{Buf, ByteBuf};
 use mio;
-use mio::{EventLoop, EventSet, Handler, NotifyError, PollOpt, Token, TryRead,
-          TryWrite};
-use mio::tcp::{TcpListener, TcpSocket, TcpStream};
-use mio::util::Slab;
-use rand::{Rng, thread_rng};
-use rocksdb::{DB, Writable};
-use protobuf;
-use protobuf::Message;
+use mio::{NotifyError, Token};
 use time;
 
 pub const SERVER_CLIENTS: Token = Token(0);
 pub const SERVER_PEERS: Token = Token(1);
-pub const PEER_BROADCAST: Token = Token(usize::MAX);
 
 lazy_static! {
     pub static ref LEADER_DURATION: time::Duration =
@@ -44,37 +35,60 @@ lazy_static! {
 
 pub type TXID = u64;
 pub type Term = u64;
+pub type Session = u64;
 pub type PeerID = String;
 
-pub struct Envelope {
-    pub address: Option<SocketAddr>,
-    pub tok: Token,
-    pub msg: ByteBuf,
+pub enum EventLoopMessage {
+    Envelope {
+        address: Option<SocketAddr>,
+        session: Session,
+        msg: ByteBuf,
+    },
+    AddPeer(String),
 }
 
-impl Clone for Envelope {
+impl Clone for EventLoopMessage {
     fn clone(&self) -> Self {
-        Envelope {
-            address: self.address,
-            tok: self.tok,
-            msg: ByteBuf::from_slice(self.msg.bytes()),
+        match self {
+            &EventLoopMessage::Envelope{address, ref session, ref msg} =>
+                EventLoopMessage::Envelope{
+                    address: address,
+                    session: *session,
+                    msg: ByteBuf::from_slice(msg.bytes()),
+                },
+            &EventLoopMessage::AddPeer(ref peer) =>
+                EventLoopMessage::AddPeer(peer.clone()),
         }
     }
 }
 
-pub trait SendChannel<M: Send, E> {
-    fn send_msg(&self, msg: M) -> E;
+pub trait SendChannel: Send {
+    type Result;
+    fn send_msg(&self, msg: EventLoopMessage) -> Self::Result;
+    fn clone_chan(&self) -> Self;
 }
 
-impl<M: Send> SendChannel<M, Result<(), NotifyError<M>>> for mio::Sender<M> {
-    fn send_msg(&self, msg: M) -> Result<(), NotifyError<M>> {
+impl SendChannel for mio::Sender<EventLoopMessage> {
+    type Result=Result<(), NotifyError<EventLoopMessage>>;
+
+    fn send_msg(&self, msg: EventLoopMessage) -> Self::Result {
         self.send(msg)
+    }
+
+    fn clone_chan(&self) -> Self {
+        self.clone()
     }
 }
 
-impl<M: Send> SendChannel<M, Result<(), SendError<M>>> for Sender<M> {
-    fn send_msg(&self, msg: M) -> Result<(), SendError<M>> {
+impl SendChannel for Sender<EventLoopMessage> {
+    type Result=Result<(), SendError<EventLoopMessage>>;
+
+    fn send_msg(&self, msg: EventLoopMessage) -> Self::Result {
         self.send(msg)
+    }
+
+    fn clone_chan(&self) -> Self {
+        self.clone()
     }
 }
 
@@ -89,7 +103,7 @@ pub struct RepPeer {
     last_accepted_term: Term,
     last_accepted_txid: TXID,
     max_sent_txid: TXID,
-    tok: Token,
+    session: Session,
     id: PeerID,
     addr: Option<SocketAddr>,
 }
@@ -98,20 +112,20 @@ pub struct RepPeer {
 pub enum State {
     Leader {
         term: Term,
-        have: Vec<Token>,
+        have: Vec<Session>,
         need: u8,
         until: time::Timespec,
     },
     Candidate {
         term: Term,
-        have: Vec<Token>,
+        have: Vec<Session>,
         need: u8,
         until: time::Timespec,
     },
     Follower {
         term: Term,
         id: PeerID,
-        tok: Token,
+        session: Session,
         leader_addr: SocketAddr,
         until: time::Timespec,
     },
@@ -121,17 +135,15 @@ pub enum State {
 impl State {
     fn valid_leader(&self, now: time::Timespec) -> bool {
         match *self {
-            State::Leader{until: until, ..} => now < until,
-            State::Follower{
-                term:_, id:_, leader_addr: _, until: until, tok: _
-            } => now < until,
+            State::Leader{until, ..} => now < until,
+            State::Follower{until, ..} => now < until,
             _ => false,
         }
     }
 
     fn valid_candidate(&self, now: time::Timespec) -> bool {
         match *self {
-            State::Candidate{until: until, ..} => now < until,
+            State::Candidate{until, ..} => now < until,
             _ => false,
         }
     }
@@ -166,7 +178,7 @@ impl State {
 
     fn should_extend_leadership(&self, now: time::Timespec) -> bool {
         match *self {
-            State::Leader{until: until, ..} => {
+            State::Leader{until, ..} => {
                 now.add(*LEADER_REFRESH) >= until && now < until
             }
             _ => false,
@@ -175,35 +187,33 @@ impl State {
 
     fn can_extend_lead(&self) -> bool {
         match *self {
-            State::Candidate{have: ref have, need: need, ..} =>
-                have.len() > need as usize,
-            State::Leader{have: ref have, need: need, ..} =>
-                have.len() > need as usize,
+            State::Candidate{ref have, need, ..} => have.len() > need as usize,
+            State::Leader{ref have, need, ..} => have.len() > need as usize,
             _ => false,
         }
     }
 
     fn following(&self, id: PeerID) -> bool {
         match *self {
-            State::Follower{id: ref fid, until: until, .. } => id == *fid,
+            State::Follower{id: ref fid, .. } => id == *fid,
             _ => false,
         }
     }
 
     fn until(&self) -> Option<time::Timespec> {
         match *self {
-            State::Leader{until: until, ..} => Some(until),
-            State::Candidate{until: until, ..} => Some(until),
-            State::Follower{ until: until, .. } => Some(until),
+            State::Leader{until, ..} => Some(until),
+            State::Candidate{until, ..} => Some(until),
+            State::Follower{until, .. } => Some(until),
             _ => None,
         }
     }
 
     pub fn term(&self) -> Option<Term> {
         match *self {
-            State::Leader{term: term, ..} => Some(term),
-            State::Candidate{term: term, ..} => Some(term),
-            State::Follower{term: term, .. } => Some(term),
+            State::Leader{term, ..} => Some(term),
+            State::Candidate{term, ..} => Some(term),
+            State::Follower{term, .. } => Some(term),
             _ => None,
         }
     }

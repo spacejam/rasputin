@@ -6,8 +6,7 @@ package rasputin;
 // Client <-> rasputin server messages
 //
 message SetReq {
-  required bytes key = 1;
-  required bytes value = 2;
+  required bytes value = 1;
 }
 
 message SetRes {
@@ -17,7 +16,6 @@ message SetRes {
 }
 
 message GetReq {
-  required bytes key = 1;
 }
 
 message GetRes {
@@ -28,9 +26,8 @@ message GetRes {
 }
 
 message CASReq {
-  required bytes key = 1;
-  optional bytes new_value = 2;
-  optional bytes old_value = 3;
+  optional bytes new_value = 1;
+  optional bytes old_value = 2;
 }
 
 message CASRes {
@@ -41,7 +38,6 @@ message CASRes {
 }
 
 message DelReq {
-  required bytes key = 1;
 }
 
 message DelRes {
@@ -52,13 +48,24 @@ message DelRes {
 }
 
 message WatchReq {
-  required bytes key = 1;
-  required uint64 last_txid = 2;
-  required bool recursive = 3;
-  required bool historical = 4;
+  optional uint64 last_txid = 1;
+  required bool recursive = 2;
+  required bool historical = 3;
 }
 
 message WatchRes {
+  required bool success = 1;
+  required Mutation last_mutation = 2;
+  optional string err = 3;
+}
+
+message SubscribeReq {
+  optional uint64 last_txid = 1;
+  required bool recursive = 2;
+  required bool historical = 3;
+}
+
+message SubscribeRes {
   required bool success = 1;
   repeated Mutation history = 2;
   optional string err = 3;
@@ -92,12 +99,15 @@ message Version {
 
 // client top-levl API
 message CliReq {
-  required uint64 req_id = 1;
-  optional GetReq get = 2;
-  optional SetReq set = 3;
-  optional CASReq cas = 4;
-  optional DelReq del = 5;
-  optional WatchReq watch = 6;
+  required bytes key = 1;
+  required uint64 req_id = 2;
+  optional GetReq get = 3;
+  optional SetReq set = 4;
+  optional CASReq cas = 5;
+  optional DelReq del = 6;
+  optional WatchReq watch = 7;
+  optional SubscribeReq subscribe = 8;
+  optional HaveMetaReq have_meta_req = 9;
 }
 
 message CliRes {
@@ -107,7 +117,9 @@ message CliRes {
   optional CASRes cas = 4;
   optional DelRes del = 5;
   optional WatchRes watch = 6;
-  optional RedirectRes redirect = 7;
+  optional SubscribeRes subscribe = 7;
+  optional RedirectRes redirect = 8;
+  optional HaveMetaRes have_meta_res = 9;
 }
 
 //
@@ -144,9 +156,55 @@ message AppendRes {
 
 // server<->server top-level api
 message PeerMsg {
-  required string srvid = 1;
-  optional VoteReq vote_req = 2;
-  optional VoteRes vote_res = 3;
-  optional Append append = 4;
-  optional AppendRes append_res = 5;
+  required bytes range_prefix = 1;
+  required string srvid = 2;
+  optional VoteReq vote_req = 3;
+  optional VoteRes vote_res = 4;
+  optional Append append = 5;
+  optional AppendRes append_res = 6;
+}
+
+//
+// Meta
+//
+
+message HaveMetaReq {}
+
+message HaveMetaRes {
+  required bool has_seen_meta = 1;
+}
+
+enum CollectionType {
+  KV = 1;
+  LOG = 2;
+  OBJECT = 3;
+  TIMESERIES = 4;
+}
+
+message RetentionPolicy {
+  required uint64 hours = 1;
+}
+
+message Replica {
+  required string address = 1;
+  required bytes id = 2;
+}
+
+message RangeMeta {
+  required bytes lower = 1;
+  optional bytes upper = 2;
+  repeated Replica replicas = 5;
+}
+
+message Collection {
+  required bytes prefix = 1;
+  required CollectionType type = 2;
+  required string name = 3;
+  optional RetentionPolicy retention_policy = 4;
+  optional uint32 replication_factor = 5;
+  repeated RangeMeta ranges = 6;
+}
+
+message Meta {
+  repeated Collection collections = 1;
 }
